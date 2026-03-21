@@ -3,9 +3,7 @@ name = "imp-graph-backend"
 version = "0.1.0"
 description = "imp_graph backend service"
 requires-python = ">=3.11"
-authors = [
-    { name = "imp_graph Team" }
-]
+authors = [{ name = "imp_graph Team" }]
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -20,20 +18,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.11.0"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.11.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

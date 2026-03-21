@@ -2,10 +2,8 @@ from contextlib import contextmanager, nullcontext
 from functools import lru_cache
 import inspect
 import logging
-from typing import Any, Awaitable, Callable, Iterator, Optional
-
-from langfuse import Langfuse
-from langfuse.session import propagate_attributes
+from typing import Any, Awaitable, Callable, Optional
+from langfuse import Langfuse, propagate_attributes
 from app.core.config import Config
 from dataclasses import dataclass
 
@@ -65,19 +63,19 @@ async def run_with_langfuse_trace(
     trace_kwargs: dict[str, Any] = {
         "name": trace_name,
         "as_type": langfuse_type,
-        "input" = trace_input
+        "input" : trace_input
     }
     if model_name is not None:
         trace_kwargs["model"] = model_name
     if metadata is not None:
         trace_kwargs["metadata"] = metadata
-    if parent_trace_id is not None:
+    if parent_span_id is not None:
         trace_kwargs["trace_context"] = {"trace_id": trace_id, "parent_span_id": parent_span_id}
     elif trace_id is not None:
         trace_kwargs["trace_context"] = {"trace_id": trace_id}
 
     with session_context(session_id) as session:
-        with _observation_context(client, trace_kwargs) as observation:
+        with client.start_as_current_observation(**trace_kwargs) as observation:
             lanfuse_entity = LangfuseEntity(
                 trace_id=observation.get_current_trace_id(),
                 observation_id=observation.get_current_observation_id(),

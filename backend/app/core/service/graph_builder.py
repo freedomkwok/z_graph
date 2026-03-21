@@ -8,7 +8,7 @@ from zep_cloud.client import Zep
 from zep_cloud import EpisodeData, EntityEdgeSourceTarget
 
 from app.core.config import Config
-from app.core.models.task import TaskManager, TaskStatus
+from app.core.schemas.task import TaskManager, TaskStatus
 from app.core.schemas.zep_operation import GraphInfo
 from app.core.utils.zep_paging import fetch_all_nodes, fetch_all_edges
 from app.core.utils.text_processor import TextProcessor

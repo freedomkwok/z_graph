@@ -7,8 +7,12 @@
   ],
   "scripts": {
     "setup": "npm install",
-    "setup:backend": "cd backend && uv sync",
+    "setup:backend": "cd backend && UV_NO_PROGRESS=1 uv sync -v",
     "setup:all": "npm run setup && npm run setup:backend",
+    "lint:backend": "npm run lint --workspace backend",
+    "lint:fix:backend": "npm run lint:fix --workspace backend",
+    "format:backend": "npm run format --workspace backend",
+    "format:check:backend": "npm run format:check --workspace backend",
     "localmode": "sh scripts/localmode.sh",
     "backend:debug": "npm run dev:debug --workspace backend",
     "dev": "concurrently \"npm run dev --workspace frontend\" \"npm run dev --workspace backend\"",

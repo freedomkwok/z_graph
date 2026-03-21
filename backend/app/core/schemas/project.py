@@ -1,39 +1,35 @@
-class ProjectStatus(str, Enum):
-    """项目状态"""
-    CREATED = "created"              # 刚创建，文件已上传
-    ONTOLOGY_GENERATED = "ontology_generated"  # 本体已生成
-    GRAPH_BUILDING = "graph_building"    # 图谱构建中
-    GRAPH_COMPLETED = "graph_completed"  # 图谱构建完成
-    FAILED = "failed"                # 失败
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional
 
+class ProjectStatus(str, Enum):
+    CREATED = "created"
+    ONTOLOGY_GENERATED = "ontology_generated"
+    GRAPH_BUILDING = "graph_building"
+    GRAPH_COMPLETED = "graph_completed"
+    FAILED = "failed" 
 
 @dataclass
 class Project:
-    """项目数据模型"""
     project_id: str
     name: str
     status: ProjectStatus
     created_at: str
     updated_at: str
     
-    # 文件信息
     files: List[Dict[str, str]] = field(default_factory=list)  # [{filename, path, size}]
     total_text_length: int = 0
     
-    # 本体信息（接口1生成后填充）
     ontology: Optional[Dict[str, Any]] = None
     analysis_summary: Optional[str] = None
     
-    # 图谱信息（接口2完成后填充）
     graph_id: Optional[str] = None
     graph_build_task_id: Optional[str] = None
     
-    # 配置
     context_requirement: Optional[str] = None
     chunk_size: int = 500
     chunk_overlap: int = 50
     
-    # 错误信息
     error: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
@@ -58,7 +54,6 @@ class Project:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Project':
-        """从字典创建"""
         status = data.get('status', 'created')
         if isinstance(status, str):
             status = ProjectStatus(status)

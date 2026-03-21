@@ -48,17 +48,6 @@ class OntologyGenerator:
         context_requirement: str = "",
         additional_context: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Generate an ontology dict (entity_types, edge_types, etc.).
-
-        Args:
-            document_texts: Document bodies
-            context_requirement: Requirement/context text
-            additional_context: Optional extra context
-
-        Returns:
-            Parsed ontology definition
-        """
         # Build user message
         user_message = self._build_user_message(
             document_texts, 
@@ -109,9 +98,9 @@ class OntologyGenerator:
         return self.prompt_provider.get(
             self.USER_EXTRACTION_PROMPT_NAME,
             label=self.PROMPT_LABEL,
-            context_requirement=context_requirement or "未提供",
+            context_requirement=context_requirement or "Not provided",
             combined_text=combined_text,
-            additional_context=additional_context or "未提供",
+            additional_context=additional_context or "Not provided",
         )
 
     def _get_system_prompt(self) -> str:
