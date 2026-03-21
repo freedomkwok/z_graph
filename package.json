@@ -1,0 +1,25 @@
+{
+  "name": "zep-build-graph",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "setup": "npm install",
+    "setup:backend": "cd backend && uv sync",
+    "setup:all": "npm run setup && npm run setup:backend",
+    "localmode": "sh scripts/localmode.sh",
+    "backend:debug": "npm run dev:debug --workspace backend",
+    "dev": "concurrently \"npm run dev --workspace frontend\" \"npm run dev --workspace backend\"",
+    "build": "npm run build --workspace frontend && npm run build --workspace backend",
+    "start": "concurrently \"npm run preview --workspace frontend\" \"npm run start --workspace backend\"",
+    "clean:pycache": "python3 -c \"from pathlib import Path; import shutil; [shutil.rmtree(p, ignore_errors=True) for p in Path('.').rglob('__pycache__')]; [p.unlink() for p in Path('.').rglob('*.pyc')]\"",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d postgres",
+    "docker:up:all": "docker compose up -d"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

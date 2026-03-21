@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic-settings
+httpx
+zep-cloud
+langfuse
+debugpy
+openai
+tenacity

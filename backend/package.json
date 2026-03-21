@@ -1,0 +1,11 @@
+{
+  "name": "imp_graph_backend",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:debug": "uv run python -m debugpy --listen 0.0.0.0:5678 -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
+    "start": "python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
+    "build": "python -m pip install --upgrade pip && python -m pip install -r requirements.txt"
+  }
+}

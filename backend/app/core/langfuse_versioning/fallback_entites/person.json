@@ -1,0 +1,9 @@
+{
+    "name": "Person",
+    "description": "Any individual person not fitting other specific person types.",
+    "attributes": [
+        {"name": "full_name", "type": "text", "description": "Full name of the person"},
+        {"name": "role", "type": "text", "description": "Role or occupation"}
+    ],
+    "examples": ["ordinary citizen", "anonymous netizen"]
+}

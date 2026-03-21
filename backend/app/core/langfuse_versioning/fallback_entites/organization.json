@@ -1,0 +1,9 @@
+{
+    "name": "Organization",
+    "description": "Any organization not fitting other specific organization types.",
+    "attributes": [
+        {"name": "org_name", "type": "text", "description": "Name of the organization"},
+        {"name": "org_type", "type": "text", "description": "Type of organization"}
+    ],
+    "examples": ["small business", "community group"]
+}
