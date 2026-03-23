@@ -1,9 +1,9 @@
 [project]
 name = "imp-graph-backend"
 version = "0.1.0"
-description = "imp_graph backend service"
+description = "zep_graph backend service"
 requires-python = ">=3.11"
-authors = [{ name = "imp_graph Team" }]
+authors = [{ name = "zep_graph Team" }]
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -16,6 +16,7 @@ dependencies = [
     "debugpy",
     "openai",
     "tenacity",
+    "psycopg[binary]>=3.3.3",
 ]
 
 [project.optional-dependencies]

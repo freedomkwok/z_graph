@@ -1,10 +1,9 @@
-import uuid
 import threading
-from datetime import datetime
-from typing import Dict, Any, Optional
-from dataclasses import dataclass, field
+import uuid
+from datetime import datetime, timedelta
+
 from app.core.schemas.task import Task, TaskStatus
-from datetime import timedelta
+
 
 class TaskManager:
     _instance = None
@@ -15,11 +14,11 @@ class TaskManager:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
-                    cls._instance._tasks: Dict[str, Task] = {}
+                    cls._instance._tasks: dict[str, Task] = {}
                     cls._instance._task_lock = threading.Lock()
         return cls._instance
     
-    def create_task(self, task_type: str, metadata: Optional[Dict] = None) -> str:
+    def create_task(self, task_type: str, metadata: dict | None = None) -> str:
         task_id = str(uuid.uuid4())
         now = datetime.now()
         
@@ -37,19 +36,19 @@ class TaskManager:
         
         return task_id
     
-    def get_task(self, task_id: str) -> Optional[Task]:
+    def get_task(self, task_id: str) -> Task | None:
         with self._task_lock:
             return self._tasks.get(task_id)
     
     def update_task(
         self,
         task_id: str,
-        status: Optional[TaskStatus] = None,
-        progress: Optional[int] = None,
-        message: Optional[str] = None,
-        result: Optional[Dict] = None,
-        error: Optional[str] = None,
-        progress_detail: Optional[Dict] = None
+        status: TaskStatus | None = None,
+        progress: int | None = None,
+        message: str | None = None,
+        result: dict | None = None,
+        error: str | None = None,
+        progress_detail: dict | None = None
     ):
         with self._task_lock:
             task = self._tasks.get(task_id)
@@ -68,7 +67,7 @@ class TaskManager:
                 if progress_detail is not None:
                     task.progress_detail = progress_detail
     
-    def complete_task(self, task_id: str, result: Dict):
+    def complete_task(self, task_id: str, result: dict):
         self.update_task(
             task_id,
             status=TaskStatus.COMPLETED,
@@ -85,7 +84,7 @@ class TaskManager:
             error=error
         )
     
-    def list_tasks(self, task_type: Optional[str] = None) -> list:
+    def list_tasks(self, task_type: str | None = None) -> list:
         with self._task_lock:
             tasks = list(self._tasks.values())
             if task_type:

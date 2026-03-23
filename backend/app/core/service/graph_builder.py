@@ -1,17 +1,17 @@
-import os
-import uuid
-import time
 import threading
-from typing import Dict, Any, List, Optional, Callable
+import time
+import uuid
+from collections.abc import Callable
+from typing import Any, Optional
 
+from zep_cloud import EntityEdgeSourceTarget, EpisodeData
 from zep_cloud.client import Zep
-from zep_cloud import EpisodeData, EntityEdgeSourceTarget
 
 from app.core.config import Config
 from app.core.managers.task_manager import TaskManager
 from app.core.schemas.task import TaskStatus
 from app.core.schemas.zep_operation import GraphInfo
-from app.core.service.zep_service import fetch_all_nodes, fetch_all_edges
+from app.core.service.zep_service import fetch_all_edges, fetch_all_nodes
 from app.core.utils.text_processor import TextProcessor
 
 
@@ -21,7 +21,7 @@ class GraphBuilderService:
     Calls the Zep API to build the knowledge graph.
     """
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         self.api_key = api_key or Config.ZEP_API_KEY
         if not self.api_key:
             raise ValueError("ZEP_API_KEY 未配置")
@@ -32,7 +32,7 @@ class GraphBuilderService:
     def build_graph_async(
         self,
         text: str,
-        ontology: Dict[str, Any],
+        ontology: dict[str, Any],
         graph_name: str = "imp Graph",
         chunk_size: int = 500,
         chunk_overlap: int = 50,
@@ -76,7 +76,7 @@ class GraphBuilderService:
         self,
         task_id: str,
         text: str,
-        ontology: Dict[str, Any],
+        ontology: dict[str, Any],
         graph_name: str,
         chunk_size: int,
         chunk_overlap: int,
@@ -160,12 +160,12 @@ class GraphBuilderService:
 
         return graph_id
 
-    def set_ontology(self, graph_id: str, ontology: Dict[str, Any]):
+    def set_ontology(self, graph_id: str, ontology: dict[str, Any]):
         """Apply ontology to the graph (public API)."""
         import warnings
-        from typing import Optional
+
         from pydantic import Field
-        from zep_cloud.external_clients.ontology import EntityModel, EntityText, EdgeModel
+        from zep_cloud.external_clients.ontology import EdgeModel, EntityModel, EntityText
 
         # Suppress Pydantic v2 warnings about Field(default=None); Zep SDK requires this pattern.
         warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
@@ -250,10 +250,10 @@ class GraphBuilderService:
     def add_text_batches(
         self,
         graph_id: str,
-        chunks: List[str],
+        chunks: list[str],
         batch_size: int = 3,
-        progress_callback: Optional[Callable] = None,
-    ) -> List[str]:
+        progress_callback: Callable | None = None,
+    ) -> list[str]:
         """Add text in batches; returns episode UUIDs."""
         episode_uuids = []
         total_chunks = len(chunks)
@@ -295,8 +295,8 @@ class GraphBuilderService:
 
     def _wait_for_episodes(
         self,
-        episode_uuids: List[str],
-        progress_callback: Optional[Callable] = None,
+        episode_uuids: list[str],
+        progress_callback: Callable | None = None,
         timeout: int = 600,
     ):
         if not episode_uuids:
@@ -331,7 +331,7 @@ class GraphBuilderService:
                         pending_episodes.remove(ep_uuid)
                         completed_count += 1
 
-                except Exception as e:
+                except Exception:
                     # Ignore single-episode query errors
                     pass
 
@@ -371,7 +371,7 @@ class GraphBuilderService:
             entity_types=list(entity_types),
         )
 
-    def get_graph_data(self, graph_id: str) -> Dict[str, Any]:
+    def get_graph_data(self, graph_id: str) -> dict[str, Any]:
         """
         Return full graph payload with rich node/edge details.
 

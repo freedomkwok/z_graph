@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 from langfuse import Langfuse
 from openai import OpenAI
@@ -14,10 +14,10 @@ class OpenAIProvider(BaseLLMProvider):
         self,
         api_key: str,
         model: str,
-        langfuse: Optional[Langfuse],
-        base_url: Optional[str] = None,
-        formatter: Optional[MessageFormatter] = None,
-        normalizer: Optional[ResponseNormalizer] = None,
+        langfuse: Langfuse | None,
+        base_url: str | None = None,
+        formatter: MessageFormatter | None = None,
+        normalizer: ResponseNormalizer | None = None,
     ) -> None:
         super().__init__(
             provider_name="openai",

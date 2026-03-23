@@ -7,7 +7,7 @@ Writes arbitrary text episodes to a Zep graph in background batches.
 import threading
 import time
 from queue import Empty, Queue
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from zep_cloud.client import Zep
 
@@ -15,7 +15,7 @@ from app.core.config import Config
 from app.core.utils.logger import get_logger
 from app.core.utils.retry import call_with_retry
 
-logger = get_logger("imp_graph.zep_episode_updater")
+logger = get_logger("zep_graph.zep_episode_updater")
 
 
 class ZepEpisodeUpdater:
@@ -24,7 +24,7 @@ class ZepEpisodeUpdater:
     MAX_RETRIES = 3
     RETRY_DELAY = 2
 
-    def __init__(self, graph_id: str, api_key: Optional[str] = None):
+    def __init__(self, graph_id: str, api_key: str | None = None):
         self.graph_id = graph_id
         self.api_key = api_key or Config.ZEP_API_KEY
         if not self.api_key:
@@ -32,11 +32,11 @@ class ZepEpisodeUpdater:
 
         self.client = Zep(api_key=self.api_key)
         self._episode_queue: Queue[str] = Queue()
-        self._buffer: List[str] = []
+        self._buffer: list[str] = []
         self._buffer_lock = threading.Lock()
 
         self._running = False
-        self._worker_thread: Optional[threading.Thread] = None
+        self._worker_thread: threading.Thread | None = None
 
         self._total_enqueued = 0
         self._total_batches_sent = 0
@@ -67,7 +67,7 @@ class ZepEpisodeUpdater:
         self._episode_queue.put(text)
         self._total_enqueued += 1
 
-    def add_episode_texts(self, texts: List[str]) -> None:
+    def add_episode_texts(self, texts: list[str]) -> None:
         for text in texts:
             self.add_episode_text(text)
 
@@ -89,7 +89,7 @@ class ZepEpisodeUpdater:
                 logger.error(f"Episode worker error: {exc}")
                 time.sleep(1)
 
-    def _send_batch(self, episode_texts: List[str]) -> None:
+    def _send_batch(self, episode_texts: list[str]) -> None:
         if not episode_texts:
             return
 
@@ -124,7 +124,7 @@ class ZepEpisodeUpdater:
             self._send_batch(self._buffer)
             self._buffer = []
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         with self._buffer_lock:
             buffered = len(self._buffer)
         return {
@@ -141,7 +141,7 @@ class ZepEpisodeUpdater:
 
 
 class ZepEpisodeManager:
-    _updaters: Dict[str, ZepEpisodeUpdater] = {}
+    _updaters: dict[str, ZepEpisodeUpdater] = {}
     _lock = threading.Lock()
     _stop_all_done = False
 
@@ -156,7 +156,7 @@ class ZepEpisodeManager:
             return updater
 
     @classmethod
-    def get_updater(cls, updater_id: str) -> Optional[ZepEpisodeUpdater]:
+    def get_updater(cls, updater_id: str) -> ZepEpisodeUpdater | None:
         return cls._updaters.get(updater_id)
 
     @classmethod
@@ -180,5 +180,5 @@ class ZepEpisodeManager:
             cls._updaters.clear()
 
     @classmethod
-    def get_all_stats(cls) -> Dict[str, Dict[str, Any]]:
+    def get_all_stats(cls) -> dict[str, dict[str, Any]]:
         return {updater_id: updater.get_stats() for updater_id, updater in cls._updaters.items()}

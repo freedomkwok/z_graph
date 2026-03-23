@@ -5,10 +5,10 @@ from .zep_operation import (
     EntityNode,
     FilteredEntities,
     GraphInfo,
-    SubGraphSearchResult,
     NodeInfo,
     PanoramaResult,
     SearchResult,
+    SubGraphSearchResult,
 )
 
 __all__ = [

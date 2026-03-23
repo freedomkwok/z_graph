@@ -1,12 +1,12 @@
-from typing import Any, Dict
+from typing import Any
 
 from app.core.llm.providers.abstractions import MessageFormatter
 from app.core.llm.types import LLMRequest
 
 
 class OpenAIMessageFormatter(MessageFormatter):
-    def format(self, request: LLMRequest, model: str) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
+    def format(self, request: LLMRequest, model: str) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "model": model,
             "messages": request.to_messages(),
             "temperature": request.temperature,

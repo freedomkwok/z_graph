@@ -3,7 +3,6 @@ Text processing helpers.
 """
 
 import re
-from typing import List
 
 from app.core.utils.text_file_parser import FileParser
 
@@ -12,11 +11,11 @@ def split_text_into_chunks(
     text: str,
     chunk_size: int = 500,
     overlap: int = 50,
-) -> List[str]:
+) -> list[str]:
     if len(text) <= chunk_size:
         return [text] if text.strip() else []
 
-    chunks: List[str] = []
+    chunks: list[str] = []
     start = 0
 
     while start < len(text):
@@ -39,7 +38,7 @@ def split_text_into_chunks(
 
 class TextProcessor:
     @staticmethod
-    def extract_from_files(file_paths: List[str]) -> str:
+    def extract_from_files(file_paths: list[str]) -> str:
         return FileParser.extract_from_multiple(file_paths)
 
     @staticmethod
@@ -47,7 +46,7 @@ class TextProcessor:
         text: str,
         chunk_size: int = 500,
         overlap: int = 50,
-    ) -> List[str]:
+    ) -> list[str]:
         return split_text_into_chunks(text, chunk_size, overlap)
 
     @staticmethod

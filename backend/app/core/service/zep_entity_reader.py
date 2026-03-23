@@ -3,16 +3,18 @@ Zep entity reader and filter.
 Loads nodes from a Zep graph and keeps nodes whose labels match defined entity types.
 """
 
-from typing import Dict, Any, List, Optional, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from zep_cloud.client import Zep
+
 from app.core.config import Config
 from app.core.schemas.zep_operation import EntityNode, FilteredEntities
 from app.core.utils.logger import get_logger
 from app.core.utils.retry import call_with_retry
-from app.core.utils.zep_service import fetch_all_nodes, fetch_all_edges
+from app.core.utils.zep_service import fetch_all_edges, fetch_all_nodes
 
-logger = get_logger('imp_graph.zep_entity_reader')
+logger = get_logger('zep_graph.zep_entity_reader')
 T = TypeVar('T')
 
 class ZepEntityReader:
@@ -23,7 +25,7 @@ class ZepEntityReader:
     optionally attach related edges and neighbor nodes.
     """
     
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         self.api_key = api_key or Config.ZEP_API_KEY
         if not self.api_key:
             raise ValueError("ZEP_API_KEY is missing")
@@ -61,7 +63,7 @@ class ZepEntityReader:
             logger.error(f"Zep {operation_name} failed after {max_retries} attempts: {str(e)}")
             raise
     
-    def get_all_nodes(self, graph_id: str) -> List[Dict[str, Any]]:
+    def get_all_nodes(self, graph_id: str) -> list[dict[str, Any]]:
         logger.info(f"Retrieving GRAPH[{graph_id}] Nodes")
 
         nodes = fetch_all_nodes(self.client, graph_id)
@@ -79,7 +81,7 @@ class ZepEntityReader:
         logger.info(f"Total: {len(nodes_data)} Nodes")
         return nodes_data
 
-    def get_all_edges(self, graph_id: str) -> List[Dict[str, Any]]:
+    def get_all_edges(self, graph_id: str) -> list[dict[str, Any]]:
         logger.info(f"Retrieving GRAPH[{graph_id}] Edges")
 
         edges = fetch_all_edges(self.client, graph_id)
@@ -98,7 +100,7 @@ class ZepEntityReader:
         logger.info(f"Total: {len(edges_data)} Edges")
         return edges_data
     
-    def get_node_edges(self, node_uuid: str) -> List[Dict[str, Any]]:
+    def get_node_edges(self, node_uuid: str) -> list[dict[str, Any]]:
         try:
             edges = self._call_with_retry(
                 func=lambda: self.client.graph.node.get_entity_edges(node_uuid=node_uuid),
@@ -124,7 +126,7 @@ class ZepEntityReader:
     def filter_defined_entities(
         self, 
         graph_id: str,
-        defined_entity_types: Optional[List[str]] = None,
+        defined_entity_types: list[str] | None = None,
         enrich_with_edges: bool = True
     ) -> FilteredEntities:
         """
@@ -240,7 +242,7 @@ class ZepEntityReader:
         self, 
         graph_id: str, 
         entity_uuid: str
-    ) -> Optional[EntityNode]:
+    ) -> EntityNode | None:
         """
         One entity with neighborhood (edges and neighbors), with retries.
 
@@ -317,7 +319,7 @@ class ZepEntityReader:
         graph_id: str, 
         entity_type: str,
         enrich_with_edges: bool = True
-    ) -> List[EntityNode]:
+    ) -> list[EntityNode]:
         """
         All entities of a given label.
 

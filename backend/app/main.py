@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from app.application.router import router as application_router
 from app.core.api.router import api_router
 from app.core.config import settings
+from app.core.managers.project_manager import ProjectManager
 
 app = FastAPI(title=settings.app_name)
 app.include_router(api_router, prefix=settings.api_prefix)
@@ -26,3 +27,8 @@ else:
     @app.get("/")
     def root() -> dict[str, str]:
         return {"message": f"{settings.app_name} is running"}
+
+
+@app.on_event("startup")
+def initialize_project_storage() -> None:
+    ProjectManager.initialize_storage()

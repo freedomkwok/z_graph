@@ -19,7 +19,7 @@ from app.core.utils.text_file_parser import FileParser
 from app.core.utils.text_processor import TextProcessor
 
 router = APIRouter()
-logger = get_logger("imp_graph.api")
+logger = get_logger("zep_graph.api")
 
 DEFAULT_CHUNK_SIZE = 500
 DEFAULT_CHUNK_OVERLAP = 50
@@ -264,7 +264,7 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
         ProjectManager.save_project(project)
 
         def build_task() -> None:
-            build_logger = get_logger("imp_graph.build")
+            build_logger = get_logger("zep_graph.build")
             try:
                 build_logger.info(f"[{task_id}] Start building graph")
                 task_manager.update_task(

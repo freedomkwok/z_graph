@@ -3,7 +3,7 @@ Core dataclass schemas for graph operations and retrieval.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 
 @dataclass
@@ -11,9 +11,9 @@ class GraphInfo:
     graph_id: str
     node_count: int
     edge_count: int
-    entity_types: List[str]
+    entity_types: list[str]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "graph_id": self.graph_id,
             "node_count": self.node_count,
@@ -26,13 +26,13 @@ class GraphInfo:
 class EntityNode:
     uuid: str
     name: str
-    labels: List[str]
+    labels: list[str]
     summary: str
-    attributes: Dict[str, Any]
-    related_edges: List[Dict[str, Any]] = field(default_factory=list)
-    related_nodes: List[Dict[str, Any]] = field(default_factory=list)
+    attributes: dict[str, Any]
+    related_edges: list[dict[str, Any]] = field(default_factory=list)
+    related_nodes: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "uuid": self.uuid,
             "name": self.name,
@@ -43,7 +43,7 @@ class EntityNode:
             "related_nodes": self.related_nodes,
         }
 
-    def get_entity_type(self) -> Optional[str]:
+    def get_entity_type(self) -> str | None:
         for label in self.labels:
             if label not in ["Entity", "Node"]:
                 return label
@@ -52,12 +52,12 @@ class EntityNode:
 
 @dataclass
 class FilteredEntities:
-    entities: List[EntityNode]
-    entity_types: Set[str]
+    entities: list[EntityNode]
+    entity_types: set[str]
     total_count: int
     filtered_count: int
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "entities": [e.to_dict() for e in self.entities],
             "entity_types": list(self.entity_types),
@@ -68,13 +68,13 @@ class FilteredEntities:
 
 @dataclass
 class SearchResult:
-    facts: List[str]
-    edges: List[Dict[str, Any]]
-    nodes: List[Dict[str, Any]]
+    facts: list[str]
+    edges: list[dict[str, Any]]
+    nodes: list[dict[str, Any]]
     query: str
     total_count: int
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "facts": self.facts,
             "edges": self.edges,
@@ -96,11 +96,11 @@ class SearchResult:
 class NodeInfo:
     uuid: str
     name: str
-    labels: List[str]
+    labels: list[str]
     summary: str
-    attributes: Dict[str, Any]
+    attributes: dict[str, Any]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "uuid": self.uuid,
             "name": self.name,
@@ -121,14 +121,14 @@ class EdgeInfo:
     fact: str
     source_node_uuid: str
     target_node_uuid: str
-    source_node_name: Optional[str] = None
-    target_node_name: Optional[str] = None
-    created_at: Optional[str] = None
-    valid_at: Optional[str] = None
-    invalid_at: Optional[str] = None
-    expired_at: Optional[str] = None
+    source_node_name: str | None = None
+    target_node_name: str | None = None
+    created_at: str | None = None
+    valid_at: str | None = None
+    invalid_at: str | None = None
+    expired_at: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "uuid": self.uuid,
             "name": self.name,
@@ -168,15 +168,15 @@ class EdgeInfo:
 class SubGraphSearchResult:
     query: str
     context_hint: str
-    sub_queries: List[str]
-    semantic_facts: List[str] = field(default_factory=list)
-    entity_insights: List[Dict[str, Any]] = field(default_factory=list)
-    relationship_chains: List[str] = field(default_factory=list)
+    sub_queries: list[str]
+    semantic_facts: list[str] = field(default_factory=list)
+    entity_insights: list[dict[str, Any]] = field(default_factory=list)
+    relationship_chains: list[str] = field(default_factory=list)
     total_facts: int = 0
     total_entities: int = 0
     total_relationships: int = 0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "query": self.query,
             "context_hint": self.context_hint,
@@ -221,16 +221,16 @@ class SubGraphSearchResult:
 @dataclass
 class PanoramaResult:
     query: str
-    all_nodes: List[NodeInfo] = field(default_factory=list)
-    all_edges: List[EdgeInfo] = field(default_factory=list)
-    active_facts: List[str] = field(default_factory=list)
-    historical_facts: List[str] = field(default_factory=list)
+    all_nodes: list[NodeInfo] = field(default_factory=list)
+    all_edges: list[EdgeInfo] = field(default_factory=list)
+    active_facts: list[str] = field(default_factory=list)
+    historical_facts: list[str] = field(default_factory=list)
     total_nodes: int = 0
     total_edges: int = 0
     active_count: int = 0
     historical_count: int = 0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "query": self.query,
             "all_nodes": [n.to_dict() for n in self.all_nodes],
@@ -267,7 +267,7 @@ Shared dataclass schemas for core services.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 
 @dataclass
@@ -276,9 +276,9 @@ class GraphInfo:
     graph_id: str
     node_count: int
     edge_count: int
-    entity_types: List[str]
+    entity_types: list[str]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "graph_id": self.graph_id,
             "node_count": self.node_count,
@@ -292,15 +292,15 @@ class EntityNode:
     """Entity node with optional neighborhood context."""
     uuid: str
     name: str
-    labels: List[str]
+    labels: list[str]
     summary: str
-    attributes: Dict[str, Any]
+    attributes: dict[str, Any]
     # Incident edges (serialized dicts)
-    related_edges: List[Dict[str, Any]] = field(default_factory=list)
+    related_edges: list[dict[str, Any]] = field(default_factory=list)
     # Neighbor node summaries
-    related_nodes: List[Dict[str, Any]] = field(default_factory=list)
+    related_nodes: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "uuid": self.uuid,
             "name": self.name,
@@ -311,7 +311,7 @@ class EntityNode:
             "related_nodes": self.related_nodes,
         }
 
-    def get_entity_type(self) -> Optional[str]:
+    def get_entity_type(self) -> str | None:
         """First non-default label (not Entity/Node)."""
         for label in self.labels:
             if label not in ["Entity", "Node"]:
@@ -322,12 +322,12 @@ class EntityNode:
 @dataclass
 class FilteredEntities:
     """Filtered entities plus type stats."""
-    entities: List[EntityNode]
-    entity_types: Set[str]
+    entities: list[EntityNode]
+    entity_types: set[str]
     total_count: int
     filtered_count: int
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "entities": [e.to_dict() for e in self.entities],
             "entity_types": list(self.entity_types),
@@ -339,13 +339,13 @@ class FilteredEntities:
 @dataclass
 class SearchResult:
     """Structured graph search hits."""
-    facts: List[str]
-    edges: List[Dict[str, Any]]
-    nodes: List[Dict[str, Any]]
+    facts: list[str]
+    edges: list[dict[str, Any]]
+    nodes: list[dict[str, Any]]
     query: str
     total_count: int
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "facts": self.facts,
             "edges": self.edges,
@@ -371,11 +371,11 @@ class NodeInfo:
     """Node projection for tools."""
     uuid: str
     name: str
-    labels: List[str]
+    labels: list[str]
     summary: str
-    attributes: Dict[str, Any]
+    attributes: dict[str, Any]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "uuid": self.uuid,
             "name": self.name,
@@ -398,15 +398,15 @@ class EdgeInfo:
     fact: str
     source_node_uuid: str
     target_node_uuid: str
-    source_node_name: Optional[str] = None
-    target_node_name: Optional[str] = None
+    source_node_name: str | None = None
+    target_node_name: str | None = None
     # Optional temporal fields
-    created_at: Optional[str] = None
-    valid_at: Optional[str] = None
-    invalid_at: Optional[str] = None
-    expired_at: Optional[str] = None
+    created_at: str | None = None
+    valid_at: str | None = None
+    invalid_at: str | None = None
+    expired_at: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "uuid": self.uuid,
             "name": self.name,

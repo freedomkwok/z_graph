@@ -6,12 +6,12 @@ API 1: analyze text and emit entity/relation type definitions.
 import json
 import re
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any
 
 from app.core.config import Config
+from app.core.langfuse_versioning.prompt_provider import PromptProvider, make_prompt_provider
 from app.core.llm.factory import create_openai_provider
 from app.core.llm.providers.openai.provider import OpenAIProvider
-from app.core.langfuse_versioning.prompt_provider import PromptProvider, make_prompt_provider
 
 
 class OntologyGenerator:
@@ -28,9 +28,9 @@ class OntologyGenerator:
 
     def __init__(
         self,
-        llm_provider: Optional[OpenAIProvider] = None,
-        prompt_provider: Optional[PromptProvider] = None,
-        fallback_entity_provider: Optional[PromptProvider] = None,
+        llm_provider: OpenAIProvider | None = None,
+        prompt_provider: PromptProvider | None = None,
+        fallback_entity_provider: PromptProvider | None = None,
     ):
         self.llm = llm_provider or create_openai_provider(
             model=Config.LLM_MODEL_NAME,
@@ -49,10 +49,10 @@ class OntologyGenerator:
 
     def generate(
         self,
-        document_texts: List[str],
+        document_texts: list[str],
         context_requirement: str = "",
-        additional_context: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        additional_context: str | None = None,
+    ) -> dict[str, Any]:
         # Build user message
         user_message = self._build_user_message(
             document_texts, context_requirement, additional_context
@@ -72,7 +72,7 @@ class OntologyGenerator:
     MAX_TEXT_LENGTH_FOR_LLM = 50000
 
     def _build_user_message(
-        self, document_texts: List[str], context_requirement: str, additional_context: Optional[str]
+        self, document_texts: list[str], context_requirement: str, additional_context: str | None
     ) -> str:
         """Assemble the user message payload."""
 
@@ -109,17 +109,17 @@ class OntologyGenerator:
         )
         return self._render_dynamic_placeholders(prompt or "", placeholder_vars).strip()
 
-    def _build_system_prompt_placeholder_vars(self, template: str) -> Dict[str, str]:
-        placeholder_vars: Dict[str, str] = {}
+    def _build_system_prompt_placeholder_vars(self, template: str) -> dict[str, str]:
+        placeholder_vars: dict[str, str] = {}
         for key in self._extract_placeholder_keys(template):
             value = self._load_system_prompt_fragment(key)
             if value:
                 placeholder_vars[key] = value
         return placeholder_vars
 
-    def _extract_placeholder_keys(self, template: str) -> List[str]:
+    def _extract_placeholder_keys(self, template: str) -> list[str]:
         seen = set[Any]()
-        ordered: List[str] = []
+        ordered: list[str] = []
         for match in self._PLACEHOLDER_PATTERN.finditer(template):
             key = match.group(1)
             if key not in seen:
@@ -127,7 +127,7 @@ class OntologyGenerator:
                 ordered.append(key)
         return ordered
 
-    def _render_dynamic_placeholders(self, template: str, placeholder_vars: Dict[str, str]) -> str:
+    def _render_dynamic_placeholders(self, template: str, placeholder_vars: dict[str, str]) -> str:
         def replacer(match: re.Match[str]) -> str:
             key = match.group(1)
             return placeholder_vars.get(key, match.group(0))
@@ -145,8 +145,8 @@ class OntologyGenerator:
                 continue
         return ""
 
-    def _candidate_prompt_names_for_placeholder(self, placeholder_key: str) -> List[str]:
-        aliases: List[str] = []
+    def _candidate_prompt_names_for_placeholder(self, placeholder_key: str) -> list[str]:
+        aliases: list[str] = []
 
         def add_alias(name: str) -> None:
             if name and name not in aliases:
@@ -163,13 +163,13 @@ class OntologyGenerator:
         if "ENTITES_" in placeholder_key:
             add_alias(placeholder_key.replace("ENTITES_", "ENTITIES_", 1))
 
-        names: List[str] = []
+        names: list[str] = []
         for alias in aliases:
             names.append(f"{alias}.md")
             names.append(f"{alias}.MD")
         return names
 
-    def _faillback_process(self, result: Dict[str, Any]) -> Dict[str, Any]:
+    def _faillback_process(self, result: dict[str, Any]) -> dict[str, Any]:
         if "entity_types" not in result:
             result["entity_types"] = []
         if "edge_types" not in result:
@@ -232,7 +232,7 @@ class OntologyGenerator:
 
         return result
 
-    def _load_fallback_entity(self, file_name: str) -> Dict[str, Any]:
+    def _load_fallback_entity(self, file_name: str) -> dict[str, Any]:
         """
         Resolve fallback entity definition:
         1) Prompt provider with label=Production (remote first)

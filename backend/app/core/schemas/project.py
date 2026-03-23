@@ -1,6 +1,7 @@
-from enum import Enum
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from enum import Enum
+from typing import Any
+
 
 class ProjectStatus(str, Enum):
     CREATED = "created"
@@ -17,22 +18,22 @@ class Project:
     created_at: str
     updated_at: str
     
-    files: List[Dict[str, str]] = field(default_factory=list)  # [{filename, path, size}]
+    files: list[dict[str, str]] = field(default_factory=list)  # [{filename, path, size}]
     total_text_length: int = 0
     
-    ontology: Optional[Dict[str, Any]] = None
-    analysis_summary: Optional[str] = None
+    ontology: dict[str, Any] | None = None
+    analysis_summary: str | None = None
     
-    graph_id: Optional[str] = None
-    graph_build_task_id: Optional[str] = None
+    graph_id: str | None = None
+    graph_build_task_id: str | None = None
     
-    context_requirement: Optional[str] = None
+    context_requirement: str | None = None
     chunk_size: int = 500
     chunk_overlap: int = 50
     
-    error: Optional[str] = None
+    error: str | None = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "project_id": self.project_id,
             "name": self.name,
@@ -52,7 +53,7 @@ class Project:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Project':
+    def from_dict(cls, data: dict[str, Any]) -> 'Project':
         status = data.get('status', 'created')
         if isinstance(status, str):
             status = ProjectStatus(status)

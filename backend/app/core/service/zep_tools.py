@@ -8,7 +8,7 @@ Primary tools (optimized):
 """
 
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any
 
 from zep_cloud.client import Zep
 
@@ -18,16 +18,16 @@ from app.core.llm.factory import create_openai_provider
 from app.core.llm.providers.openai.provider import OpenAIProvider
 from app.core.schemas.zep_operation import (
     EdgeInfo,
-    SubGraphSearchResult,
     NodeInfo,
     PanoramaResult,
     SearchResult,
+    SubGraphSearchResult,
 )
+from app.core.service.zep_service import fetch_all_edges, fetch_all_nodes
 from app.core.utils.logger import get_logger
 from app.core.utils.retry import call_with_retry
-from app.core.service.zep_service import fetch_all_nodes, fetch_all_edges
 
-logger = get_logger("imp_graph.zep_tools")
+logger = get_logger("zep_graph.zep_tools")
 
 
 class ZepToolsService:
@@ -48,9 +48,9 @@ class ZepToolsService:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        llm_provider: Optional[OpenAIProvider] = None,
-        prompt_provider: Optional[PromptProvider] = None,
+        api_key: str | None = None,
+        llm_provider: OpenAIProvider | None = None,
+        prompt_provider: PromptProvider | None = None,
     ):
         self.api_key = api_key or Config.ZEP_API_KEY
         if not self.api_key:
@@ -260,7 +260,7 @@ class ZepToolsService:
             facts=facts, edges=edges_result, nodes=nodes_result, query=query, total_count=len(facts)
         )
 
-    def get_all_nodes(self, graph_id: str) -> List[NodeInfo]:
+    def get_all_nodes(self, graph_id: str) -> list[NodeInfo]:
         """
         All nodes (paged fetch).
 
@@ -290,7 +290,7 @@ class ZepToolsService:
         logger.info(f"Got {len(result)} nodes")
         return result
 
-    def get_all_edges(self, graph_id: str, include_temporal: bool = True) -> List[EdgeInfo]:
+    def get_all_edges(self, graph_id: str, include_temporal: bool = True) -> list[EdgeInfo]:
         """
         All edges (paged).
 
@@ -327,7 +327,7 @@ class ZepToolsService:
         logger.info(f"Got {len(result)} edges")
         return result
 
-    def get_node_detail(self, node_uuid: str) -> Optional[NodeInfo]:
+    def get_node_detail(self, node_uuid: str) -> NodeInfo | None:
         """
         Single node by UUID.
 
@@ -359,7 +359,7 @@ class ZepToolsService:
             logger.error(f"Failed to get node detail: {str(e)}")
             return None
 
-    def get_node_edges(self, graph_id: str, node_uuid: str) -> List[EdgeInfo]:
+    def get_node_edges(self, graph_id: str, node_uuid: str) -> list[EdgeInfo]:
         """
         Edges incident on a node (filters full edge list).
 
@@ -387,7 +387,7 @@ class ZepToolsService:
             logger.warning(f"Failed to get edges related to node {node_uuid[:8]}: {str(e)}")
             return []
 
-    def get_entities_by_type(self, graph_id: str, entity_type: str) -> List[NodeInfo]:
+    def get_entities_by_type(self, graph_id: str, entity_type: str) -> list[NodeInfo]:
         """
         Nodes whose labels include the given ontology type.
 
@@ -410,7 +410,7 @@ class ZepToolsService:
         logger.info(f"Found {len(filtered)} entities of type {entity_type}")
         return filtered
 
-    def get_entity_summary(self, graph_id: str, entity_name: str) -> Dict[str, Any]:
+    def get_entity_summary(self, graph_id: str, entity_name: str) -> dict[str, Any]:
         """
         Bundle search hits plus edges for a named entity.
 
@@ -444,7 +444,7 @@ class ZepToolsService:
             "total_relations": len(related_edges),
         }
 
-    def get_graph_statistics(self, graph_id: str) -> Dict[str, Any]:
+    def get_graph_statistics(self, graph_id: str) -> dict[str, Any]:
         """
         Label and relation name histograms.
 
@@ -608,7 +608,7 @@ class ZepToolsService:
 
     def _generate_sub_queries(
         self, query: str, context_hint: str = "", report_context: str = "", max_queries: int = 5
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Ask the LLM for sub-queries (JSON list).
         """

@@ -9,3 +9,4 @@ langfuse
 debugpy
 openai
 tenacity
+psycopg[binary]

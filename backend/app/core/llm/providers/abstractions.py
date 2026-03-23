@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any
 
 from app.core.llm.types import LLMRequest, LLMResponse
 
 
 class MessageFormatter(ABC):
     @abstractmethod
-    def format(self, request: LLMRequest, model: str) -> Dict[str, Any]:
+    def format(self, request: LLMRequest, model: str) -> dict[str, Any]:
         raise NotImplementedError
 
 

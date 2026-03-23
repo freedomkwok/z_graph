@@ -5,4 +5,5 @@ frontend/dist/
 __pycache__/
 *.pyc
 backend/.env
+database/.env
 backend/.venv/

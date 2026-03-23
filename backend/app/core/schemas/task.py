@@ -1,9 +1,7 @@
-import uuid
-import threading
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, Optional
-from dataclasses import dataclass, field
+from typing import Any
 
 
 class TaskStatus(str, Enum):
@@ -21,12 +19,12 @@ class Task:
     updated_at: datetime
     progress: int = 0
     message: str = ""
-    result: Optional[Dict] = None
-    error: Optional[str] = None
-    metadata: Dict = field(default_factory=dict)
-    progress_detail: Dict = field(default_factory=dict)
+    result: dict | None = None
+    error: str | None = None
+    metadata: dict = field(default_factory=dict)
+    progress_detail: dict = field(default_factory=dict)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "task_id": self.task_id,
             "task_type": self.task_type,

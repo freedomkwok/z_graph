@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from abc import ABC, abstractmethod
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-import logging
-import threading
 from typing import Any
 from urllib.parse import urlparse
 
@@ -147,7 +147,7 @@ class LangfusePromptProvider(PromptProvider):
             version=version,
             vars=vars,
         )
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         ttl_seconds = int(_setting("prompt_cache_ttl_seconds", 300))
         if ttl_seconds > 0:
             cached = _LANGFUSE_PROMPT_CACHE.get_fresh(cache_key, now)
@@ -157,15 +157,12 @@ class LangfusePromptProvider(PromptProvider):
         stale_value = _LANGFUSE_PROMPT_CACHE.get_stale(cache_key) if ttl_seconds > 0 else None
 
         try:
-            prompt = self.client.get_prompt(
-                prompt_name,
+            rendered = self._load_prompt_with_candidates(
+                prompt_name=prompt_name,
                 version=version,
                 label=effective_label,
+                vars=vars,
             )
-            if hasattr(prompt, "compile"):
-                rendered = prompt.compile(**vars)
-            else:
-                rendered = str(prompt)
         except Exception:
             if stale_value is not None:
                 logger.warning(
@@ -178,6 +175,58 @@ class LangfusePromptProvider(PromptProvider):
         if ttl_seconds > 0:
             _LANGFUSE_PROMPT_CACHE.set(cache_key, rendered, now, ttl_seconds)
         return rendered
+
+    @staticmethod
+    def _build_prompt_name_candidates(prompt_name: str) -> list[str]:
+        candidates: list[str] = []
+
+        def add_candidate(value: str) -> None:
+            normalized = value.strip("/")
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+
+        add_candidate(prompt_name)
+
+        # Support folder-structured names synced from langfuse_versioning.
+        if "/" not in prompt_name:
+            add_candidate(f"prompts/{prompt_name}")
+            add_candidate(f"sub_queries/{prompt_name}")
+            add_candidate(f"fallback_entities/{prompt_name}")
+            add_candidate(f"fallback_entites/{prompt_name}")
+
+        if prompt_name.startswith("fallback_entites/"):
+            add_candidate(prompt_name.replace("fallback_entites/", "fallback_entities/", 1))
+        if prompt_name.startswith("fallback_entities/"):
+            add_candidate(prompt_name.replace("fallback_entities/", "fallback_entites/", 1))
+
+        return candidates
+
+    def _load_prompt_with_candidates(
+        self,
+        *,
+        prompt_name: str,
+        version: int | None,
+        label: str | None,
+        vars: dict[str, Any],
+    ) -> str:
+        last_exc: Exception | None = None
+        for candidate in self._build_prompt_name_candidates(prompt_name):
+            try:
+                prompt = self.client.get_prompt(
+                    candidate,
+                    version=version,
+                    label=label,
+                )
+                if hasattr(prompt, "compile"):
+                    return prompt.compile(**vars)
+                return str(prompt)
+            except Exception as exc:
+                last_exc = exc
+                continue
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError(f"Unable to resolve prompt '{prompt_name}' from provider")
 
 
 class FallbackPromptProvider(PromptProvider):

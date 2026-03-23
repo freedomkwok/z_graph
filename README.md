@@ -1,114 +1,195 @@
-# imp_graph scaffold
+# zep_graph
 
-Starter structure modeled after `imp`, with:
+`zep_graph` is a full-stack document-to-knowledge-graph builder.
 
-- `frontend`: React + Vite
-- `backend`: FastAPI with dotenv-based config loading
-- root npm workspace scripts to run/build both
-- single root Dockerfile for both frontend + backend runtime
+- `frontend`: React + Vite UI for project selection, ontology generation, and graph build monitoring
+- `backend`: FastAPI APIs that extract text, generate ontology with LLM, and build graph data in Zep
+- `database`: SQL bootstrap for project storage when using Postgres
+- root workspace scripts for setup, build, and utility commands
+
+## Current workflow
+
+1. Upload files and submit simulation requirement in UI Step A.
+2. Backend calls `POST /api/ontology/generate` to extract ontology types.
+3. Trigger UI Step B to call `POST /api/build`.
+4. Backend creates a graph, sets ontology, ingests chunks, and polls processing status.
+5. Frontend polls `GET /api/task/{task_id}` and can load graph counts from `GET /api/data/{graph_id}`.
 
 ## Project structure
 
 ```text
-imp_graph/
-├── backend/
-│   ├── app/
-│   │   ├── core/
-│   │   │   ├── api/
-│   │   │   ├── manager/
-│   │   │   ├── service/
-│   │   │   ├── utils/
-│   │   │   ├── component/
-│   │   │   └── config.py
-│   │   ├── application/
-│   │   └── main.py
-│   ├── package.json
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   └── package.json
-├── Dockerfile
-├── docker-compose.yml
-└── package.json
+zep_graph/
+├── frontend/                  # React + Vite app (default dev port 5173)
+├── backend/                   # FastAPI app (default port 8000)
+│   └── app/
+│       ├── core/              # shared API/services/managers/utils
+│       ├── application/        # app-specific extension point
+│       └── main.py             # FastAPI entrypoint + optional static hosting
+├── database/
+│   ├── init_tables.sql
+│   └── init_tables.py
+├── Dockerfile                 # builds frontend and serves via backend
+├── docker-compose.yml         # app + postgres
+└── package.json               # npm workspace root
 ```
 
-## Local development
+## Prerequisites
 
-1. Install all JavaScript + Python dependencies:
+- Node.js 20+
+- Python 3.11+
+- `uv` for Python dependency sync (`pip install uv` if needed)
+- Docker (optional, for containerized run)
+
+## Environment configuration
+
+Create backend app env file:
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+Create database init env file:
+
+```bash
+cp database/.env.example database/.env
+```
+
+Minimum required backend keys for end-to-end graph build:
+
+- `LLM_API_KEY`
+- `ZEP_API_KEY`
+
+Optional backend keys:
+
+- `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`
+- Postgres keys when using `STORAGE=postgres`
+
+Database bootstrap/init keys (`POSTGRES_HOST_PORT`, `DB_INIT_AUTO_PROVISION`, `POSTGRES_BOOTSTRAP_*`, etc.) live in `database/.env`.
+
+## Local development (recommended)
+
+Install all JS + Python dependencies:
 
 ```bash
 npm run setup:all
 ```
 
-2. If needed, install backend Python dependencies only:
+Start backend:
 
 ```bash
-npm run setup:backend
+npm run dev --workspace backend
 ```
 
-3. Start local mode (auto-checks PostgreSQL; starts it if missing):
+Start frontend (new terminal):
 
 ```bash
-npm run localmode
+npm run dev --workspace frontend
 ```
 
-4. Start frontend + backend only (if PostgreSQL already running):
+Open:
+
+- Frontend: `http://localhost:5173`
+- Backend health: `http://localhost:8000/api/health`
+
+Vite proxies `/api` to backend on `http://localhost:8000`.
+
+## Backend debug mode
 
 ```bash
-npm run dev
+npm run dev:debug --workspace backend
 ```
 
-5. Start backend in debug mode (debugpy attach on port `5678`):
+Then attach with VS Code launch config: `Attach Backend (debugpy:5678)`.
+
+## Storage modes
+
+Default mode is file-based storage (`STORAGE=file`) under `backend/uploads`.
+
+To use Postgres runtime:
+
+1. Set `STORAGE=postgres` in `backend/.env`
+2. Initialize schema:
 
 ```bash
-npm run backend:debug
+npm run db:init
 ```
 
-Then run the VS Code launch config:
-- `Attach Backend (debugpy:5678)`
+`db:init` will:
 
-6. Clean Python cache files:
+1. Load DB init variables from `database/.env` (fallback: `database/.env.example`)
+2. Try to start Docker `postgres` (`docker compose up -d postgres`)
+3. Fall back to an existing local Postgres if Docker startup is skipped/fails
+4. Auto-provision the target user/database (if missing), then apply schema
+
+### Quick recipes
+
+1) If `5432` is occupied, run Docker Postgres on another port:
+
+Set in `database/.env`:
 
 ```bash
-npm run clean:pycache
+POSTGRES_HOST_PORT=55432
 ```
+
+Or one-off:
+
+```bash
+POSTGRES_HOST_PORT=55432 npm run db:init
+```
+
+2) Reuse existing Langfuse Postgres (`localhost:5432`) and auto-provision DB/user:
+
+Set in `database/.env`:
+
+```bash
+DB_INIT_AUTO_PROVISION=true
+POSTGRES_BOOTSTRAP_URL=postgresql://postgres:postgres@localhost:5432/postgres
+```
+
+Then run:
+
+```bash
+npm run db:init
+```
+
+`init_tables.py` will create/alter the target role (`POSTGRES_USER`), create `POSTGRES_DB` if missing, grant privileges, and apply `database/init_tables.sql`.
 
 ## Docker
 
-```bash
-npm run docker:build
-npm run docker:up
-```
-
-`npm run docker:up` starts local PostgreSQL only.
-To start all compose services, run:
+Build and run all services:
 
 ```bash
-npm run docker:up:all
+docker compose up --build
 ```
 
-Then open:
+Open:
 
-- `http://localhost:8000` for the React app
-- `http://localhost:8000/api/health` for backend health
+- App: `http://localhost:8000`
+- Health: `http://localhost:8000/api/health`
 
-Local PostgreSQL is included in Docker Compose:
+Notes:
 
-- Host: `localhost`
-- Port: `5432`
-- Credentials and DB name are configured in `backend/.env.example`
-- Inside Docker network, backend should use `POSTGRES_HOST=postgres`
+- Compose defines `postgres` and `app` services.
+- Current compose file reads environment from `backend/.env.example`.
 
-Database environment variables:
+## API quick reference
 
-- `POSTGRES_HOST`
-- `POSTGRES_PORT`
-- `POSTGRES_DB`
-- `POSTGRES_USER`
-- `POSTGRES_PASSWORD`
-- `POSTGRES_URL` (optional override)
+- `GET /api/health`
+- `GET /api/project/list`
+- `GET /api/project/{project_id}`
+- `POST /api/ontology/generate` (multipart form with files + requirement)
+- `POST /api/build`
+- `GET /api/task/{task_id}`
+- `GET /api/data/{graph_id}`
+- `DELETE /api/project/{project_id}`
+- `DELETE /api/delete/{graph_id}`
 
-Backend convention:
+## Useful root scripts
 
-- Shared/reusable framework code lives in `backend/app/core`
-- App-specific code goes into `backend/app/application`
+- `npm run setup:all` - install workspace deps + backend Python deps via `uv`
+- `npm run db:up` - start only Docker Postgres (`POSTGRES_HOST_PORT` supported)
+- `npm run db:init` - start/fallback Postgres, auto-provision role+db, then initialize schema
+- `npm run build` - build frontend and run backend install step
+- `npm run start` - run frontend preview (4173) and backend start (8000)
+- `npm run kill:dev` - kill common frontend/backend dev processes
+- `npm run clean:pycache` - remove Python cache artifacts

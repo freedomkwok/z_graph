@@ -1,18 +1,18 @@
-from typing import Optional
+
+from langfuse import Langfuse
 
 from app.core.llm.providers.base import BaseLLMProvider
 from app.core.llm.providers.openai.formatter import OpenAIMessageFormatter
 from app.core.llm.providers.openai.normalizer import OpenAIResponseNormalizer
 from app.core.llm.providers.openai.provider import OpenAIProvider
 from app.core.utils.langfuse import get_langfuse_client
-from langfuse import Langfuse
 
 
 def create_openai_provider(
     model: str,
-    api_key: Optional[str],
-    base_url: Optional[str],
-    langfuse: Optional[Langfuse] = None,
+    api_key: str | None,
+    base_url: str | None,
+    langfuse: Langfuse | None = None,
 ) -> OpenAIProvider:
     if not api_key:
         raise ValueError("LLM_API_KEY is required for openai provider")
@@ -31,9 +31,9 @@ def create_openai_provider(
 def create_provider(
     provider_name: str,
     model: str,
-    api_key: Optional[str],
-    base_url: Optional[str],
-    langfuse: Optional[Langfuse] = None,
+    api_key: str | None,
+    base_url: str | None,
+    langfuse: Langfuse | None = None,
 ) -> BaseLLMProvider:
     normalized = provider_name.strip().lower()
     if normalized == "openai":

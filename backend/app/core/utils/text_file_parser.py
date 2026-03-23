@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import List
 
 
 def _read_text_with_fallback(file_path: str) -> str:
@@ -83,7 +82,7 @@ class FileParser:
         return _read_text_with_fallback(file_path)
     
     @classmethod
-    def extract_from_multiple(cls, file_paths: List[str]) -> str:
+    def extract_from_multiple(cls, file_paths: list[str]) -> str:
         all_texts = []
         
         for i, file_path in enumerate(file_paths, 1):

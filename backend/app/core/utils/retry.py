@@ -1,7 +1,14 @@
 import logging
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
-from tenacity import Retrying, RetryCallState, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    RetryCallState,
+    Retrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 T = TypeVar("T")
 

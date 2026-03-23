@@ -1,11 +1,13 @@
-from contextlib import contextmanager, nullcontext
-from functools import lru_cache
-import inspect
 import logging
-from typing import Any, Awaitable, Callable, Optional
-from langfuse import Langfuse, propagate_attributes
-from app.core.config import Config
+from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
+from functools import lru_cache
+from typing import Any
+
+from langfuse import Langfuse, propagate_attributes
+
+from app.core.config import Config
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -16,7 +18,7 @@ class LangfuseEntity:
     observation_id: str | None = None
 
 @lru_cache(maxsize=1)
-def get_langfuse_client() -> Optional[Langfuse]:
+def get_langfuse_client() -> Langfuse | None:
     """
     Lazily create and cache a single Langfuse client from project config.
     Returns None when Langfuse keys are not configured.
@@ -43,7 +45,7 @@ async def run_with_langfuse_trace(
     trace_name: str,
     trace_input: Any,
     runner: Callable[[], Awaitable[Any]],
-    langfuse: Optional[Langfuse] = None,
+    langfuse: Langfuse | None = None,
     on_success: Callable[[Any, Any], None] | None = None,
     metadata: dict[str, Any] | None = None,
     model_name: str | None = None,

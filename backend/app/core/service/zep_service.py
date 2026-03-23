@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-import httpx
-
-from app.core.config import settings
-
 import time
 from collections.abc import Callable
 from typing import Any
 
+import httpx
 from zep_cloud import InternalServerError
 from zep_cloud.client import Zep
 
+from app.core.config import settings
 from app.core.utils.logger import get_logger
 
-logger = get_logger("imp_graph.zep_service")
+logger = get_logger("zep_graph.zep_service")
 
 _DEFAULT_PAGE_SIZE = 100
 _MAX_NODES = 2000

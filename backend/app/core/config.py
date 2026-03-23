@@ -16,17 +16,19 @@ else:
 
 
 class Settings(BaseSettings):
-    app_name: str = "imp_graph_backend"
+    app_name: str = "zep_graph_backend"
     app_env: str = "development"
     api_prefix: str = "/api"
     host: str = "0.0.0.0"
     port: int = 8000
     upload_folder: str = str(BACKEND_DIR / "uploads")
+    storage: str = "file"
+    project_storage_connection_string: str | None = None
     postgres_host: str = "localhost"
     postgres_port: int = 5432
-    postgres_db: str = "imp_graph"
-    postgres_user: str = "imp_graph"
-    postgres_password: str = "imp_graph_password"
+    postgres_db: str = "zep_graph"
+    postgres_user: str = "zep_graph"
+    postgres_password: str = "zep_graph_password"
     postgres_url: str | None = None
     llm_provider: str = "openai"
     llm_api_key: str | None = None
@@ -39,6 +41,7 @@ class Settings(BaseSettings):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
+    langfuse_base_url: str | None = None
     zep_api_key: str | None = None
     zep_api_url: str | None = None
 
@@ -51,10 +54,17 @@ class Settings(BaseSettings):
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
+    @property
+    def storage_connection_string(self) -> str:
+        if self.project_storage_connection_string:
+            return self.project_storage_connection_string
+        return self.database_url
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE if ENV_FILE.exists() else FALLBACK_ENV_FILE),
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
 
@@ -75,6 +85,8 @@ class Config:
     PORT = settings.port
 
     UPLOAD_FOLDER = settings.upload_folder
+    STORAGE = settings.storage
+    PROJECT_STORAGE_CONNECTION_STRING = settings.storage_connection_string
 
     POSTGRES_HOST = settings.postgres_host
     POSTGRES_PORT = settings.postgres_port
@@ -96,6 +108,7 @@ class Config:
     LANGFUSE_PUBLIC_KEY = settings.langfuse_public_key
     LANGFUSE_SECRET_KEY = settings.langfuse_secret_key
     LANGFUSE_HOST = settings.langfuse_host
+    LANGFUSE_BASE_URL = settings.langfuse_base_url
 
     ZEP_API_KEY = settings.zep_api_key
     ZEP_API_URL = settings.zep_api_url
