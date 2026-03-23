@@ -3,7 +3,7 @@ import threading
 from datetime import datetime
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
-from app.core.schema.task import Task, TaskStatus
+from app.core.schemas.task import Task, TaskStatus
 from datetime import timedelta
 
 class TaskManager:

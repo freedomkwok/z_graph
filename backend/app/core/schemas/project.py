@@ -33,7 +33,6 @@ class Project:
     error: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
         return {
             "project_id": self.project_id,
             "name": self.name,

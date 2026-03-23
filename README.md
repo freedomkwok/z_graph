@@ -1,6 +1,6 @@
 # imp_graph scaffold
 
-Starter structure modeled after `MiroFish`, with:
+Starter structure modeled after `imp`, with:
 
 - `frontend`: React + Vite
 - `backend`: FastAPI with dotenv-based config loading

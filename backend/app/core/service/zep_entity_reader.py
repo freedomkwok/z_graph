@@ -10,7 +10,7 @@ from app.core.config import Config
 from app.core.schemas.zep_operation import EntityNode, FilteredEntities
 from app.core.utils.logger import get_logger
 from app.core.utils.retry import call_with_retry
-from app.core.utils.zep_paging import fetch_all_nodes, fetch_all_edges
+from app.core.utils.zep_service import fetch_all_nodes, fetch_all_edges
 
 logger = get_logger('imp_graph.zep_entity_reader')
 T = TypeVar('T')
@@ -309,7 +309,7 @@ class ZepEntityReader:
             )
             
         except Exception as e:
-            logger.error(f"获取实体 {entity_uuid} 失败: {str(e)}")
+            logger.error(f"Failed to get entity {entity_uuid}: {str(e)}")
             return None
     
     def get_entities_by_type(

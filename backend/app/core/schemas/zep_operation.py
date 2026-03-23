@@ -165,7 +165,7 @@ class EdgeInfo:
 
 
 @dataclass
-class InsightForgeResult:
+class SubGraphSearchResult:
     query: str
     context_hint: str
     sub_queries: List[str]
