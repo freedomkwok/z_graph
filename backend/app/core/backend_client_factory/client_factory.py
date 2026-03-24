@@ -10,18 +10,21 @@ logger = logging.getLogger('zep_graph.zep_factory')
 
 
 def create_zep_client(
-    core: Optional[str] = None,
+    backend: Optional[str] = None,
     api_key: Optional[str] = None,
     graphdb_uri: Optional[str] = None,
     graphdb_user: Optional[str] = None,
     graphdb_password: Optional[str] = None,
 ) -> ZepClientAdapter:
-    core = core or Config.ZEP_CORE
-
-    if core == 'graphiti':
+    if backend == 'graphiti':
         return _create_graphiti_client(graphdb_uri, graphdb_user, graphdb_password)
-    else:
+    elif backend == 'zep_cloud':
         return _create_cloud_client(api_key)
+
+    raise ValueError(
+        f"Unsupported ZEP backend {backend}/{Config.ZEP_BACKEND}. "
+        "Expected one of: zep_cloud, graphiti."
+    )
 
 
 def _create_cloud_client(api_key: Optional[str] = None) -> ZepClientAdapter:

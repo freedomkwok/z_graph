@@ -1,3 +1,4 @@
+import inspect
 import threading
 import time
 import uuid
@@ -5,9 +6,9 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from zep_cloud import EntityEdgeSourceTarget, EpisodeData
-from zep_cloud.client import Zep
 
 from app.core.config import Config
+from app.core.backend_client_factory.client_factory import create_zep_client
 from app.core.managers.task_manager import TaskManager
 from app.core.schemas.task import TaskStatus
 from app.core.schemas.zep_operation import GraphInfo
@@ -23,53 +24,22 @@ class GraphBuilderService:
     Calls the Zep API to build the knowledge graph.
     """
 
-    def __init__(self, api_key: str | None = None, client: Any | None = None):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        client: Any | None = None,
+        backend: str | None = None,
+    ):
+        self.backend = backend
         self.api_key = api_key or Config.ZEP_API_KEY
-        if not self.api_key:
-            raise ValueError("ZEP_API_KEY Not Configured")
 
-        self.client = self._normalize_client(client or Zep(api_key=self.api_key))
-        self._validate_required_graph_api(self.client)
+        # If caller provides a client, we trust it and only validate interface shape/signatures.
+        self.client = client or create_zep_client(
+            backend=self.backend,
+            api_key=self.api_key,
+        )
         self.task_manager = TaskManager()
 
-    @staticmethod
-    def _normalize_client(client: Any) -> Any:
-        """Normalize cloud clients to a shape exposing `.graph.*` APIs."""
-        if hasattr(client, "graph"):
-            return client
-
-        inner_client = getattr(client, "client", None)
-        if inner_client is not None and hasattr(inner_client, "graph"):
-            return inner_client
-
-        raise TypeError(
-            "Unsupported Zep client: expected object with `graph` or `client.graph` APIs."
-        )
-
-    @staticmethod
-    def _validate_required_graph_api(client: Any) -> None:
-        """Ensure the client has all graph APIs needed by main build/delete routes."""
-        graph = getattr(client, "graph", None)
-        missing: list[str] = []
-
-        for method_name in ("create", "update", "set_ontology", "add_batch", "delete"):
-            if not callable(getattr(graph, method_name, None)):
-                missing.append(f"graph.{method_name}")
-
-        if not callable(getattr(getattr(graph, "episode", None), "get", None)):
-            missing.append("graph.episode.get")
-
-        if not callable(getattr(getattr(graph, "node", None), "get_by_graph_id", None)):
-            missing.append("graph.node.get_by_graph_id")
-
-        if not callable(getattr(getattr(graph, "edge", None), "get_by_graph_id", None)):
-            missing.append("graph.edge.get_by_graph_id")
-
-        if missing:
-            raise TypeError(
-                "Zep client is missing required APIs for GraphBuilderService: "
-                + ", ".join(missing)
-            )
 
     def build_graph_async(
         self,

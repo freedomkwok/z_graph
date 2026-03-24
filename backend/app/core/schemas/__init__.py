@@ -1,6 +1,6 @@
 """Schema package exports."""
 
-from app.core.backend_client_factory.schemas.zep_operation import (
+from app.core.schemas.zep_operation import (
     EdgeInfo,
     EntityNode,
     FilteredEntities,

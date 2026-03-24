@@ -364,7 +364,7 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                     message="Initializing graph build service",
                 )
 
-                builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
+                builder = GraphBuilderService(backend=Config.ZEP_BACKEND ,api_key=Config.ZEP_API_KEY)
 
                 task_manager.update_task(task_id, message="Splitting Text", progress=5)
                 chunks = TextProcessor.split_text(
@@ -498,7 +498,7 @@ def get_graph_data(graph_id: str) -> Any:
         if not Config.ZEP_API_KEY:
             return _error_response(500, "ZEP_API_KEY not configured")
 
-        builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
+        builder = GraphBuilderService(backend=Config.ZEP_BACKEND ,api_key=Config.ZEP_API_KEY)
         graph_data = builder.get_graph_data(graph_id)
         return {
             "success": True,
@@ -515,7 +515,7 @@ def delete_graph(graph_id: str) -> Any:
         if not Config.ZEP_API_KEY:
             return _error_response(500, "ZEP_API_KEY not configured")
 
-        builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
+        builder = GraphBuilderService(backend=Config.ZEP_BACKEND ,api_key=Config.ZEP_API_KEY)
         builder.delete_graph(graph_id)
         return {
             "success": True,
