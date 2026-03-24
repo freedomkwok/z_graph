@@ -196,6 +196,7 @@ def generate_ontology(
     project_name: str = Form("Unnamed Project"),
     additional_context: str = Form(""),
     prompt_label: str = Form("Production"),
+    project_id: str = Form(""),
 ) -> Any:
     try:
         logger.info("----------------Start generating ontology----------------")
@@ -208,12 +209,25 @@ def generate_ontology(
         if not uploaded_files:
             return _error_response(400, "Upload at least one document file")
 
-        project = ProjectManager.create_project(name=project_name)
+        normalized_project_id = str(project_id or "").strip()
+        created_new_project = False
+        if normalized_project_id:
+            project = ProjectManager.get_project(normalized_project_id)
+            if not project:
+                return _error_response(404, f"Project not found: {normalized_project_id}")
+            if project_name and str(project_name).strip():
+                project.name = str(project_name).strip()
+            logger.info(f"Reusing Project: {project.project_id}")
+        else:
+            project = ProjectManager.create_project(name=project_name)
+            created_new_project = True
+            logger.info(f"Created Project: {project.project_id}")
+
         project.context_requirement = requirement
         project.prompt_label = PromptLabelManager.ensure_label_exists(
             OntologyGenerator._normalize_prompt_label(prompt_label)
         )
-        logger.info(f"Created Project: {project.project_id}")
+        project.error = None
 
         document_texts: list[str] = []
         all_text = ""
@@ -242,7 +256,8 @@ def generate_ontology(
                 all_text += f"\n\n=== {file_info['original_filename']} ===\n{text}"
 
         if not document_texts:
-            ProjectManager.delete_project(project.project_id)
+            if created_new_project:
+                ProjectManager.delete_project(project.project_id)
             return _error_response(400, "not successful, please check file format")
 
         project.total_text_length = len(all_text)
@@ -329,6 +344,10 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
             project.graph_build_task_id = None
             project.error = None
 
+        requested_graph_id = str(data.get("graph_id") or "").strip()
+        existing_graph_id = str(project.zep_graph_id or "").strip()
+        resolved_graph_id = requested_graph_id or existing_graph_id or None
+
         graph_name = data.get("graph_name", project.name or "imp Graph")
         chunk_size = int(data.get("chunk_size", project.chunk_size or DEFAULT_CHUNK_SIZE))
         chunk_overlap = int(
@@ -376,7 +395,9 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
 
                 task_manager.update_task(task_id, message="Creating Zep Graph", progress=10)
                 graph_id, project_workspace_id = builder.create_graph(
-                    name=graph_name, project_id=project_id
+                    name=graph_name,
+                    project_id=project_id,
+                    graph_id=resolved_graph_id,
                 )
 
                 project.zep_graph_id = graph_id

@@ -700,7 +700,9 @@ export function TaskStoreProvider({ children }) {
   };
 
   const runOntologyGenerate = async () => {
-    const { simulationRequirement, files, projectName, additionalContext, promptLabel } = state.form;
+    const { projectId, simulationRequirement, files, projectName, additionalContext, promptLabel } =
+      state.form;
+    const normalizedProjectId = normalizeProjectId(projectId);
 
     if (!simulationRequirement.trim()) {
       addSystemLog("Validation failed: simulation requirement is required.");
@@ -730,11 +732,18 @@ export function TaskStoreProvider({ children }) {
       type: "PATCH_ONTOLOGY_TASK",
       payload: { status: "running", message: "Generating ontology..." },
     });
-    addSystemLog("Starting ontology generation...");
+    addSystemLog(
+      normalizedProjectId
+        ? `Starting ontology generation (reuse project: ${normalizedProjectId})...`
+        : "Starting ontology generation (new project)...",
+    );
 
     try {
       const formData = new FormData();
       files.forEach((file) => formData.append("files", file));
+      if (normalizedProjectId) {
+        formData.append("project_id", normalizedProjectId);
+      }
       formData.append("simulation_requirement", simulationRequirement);
       formData.append("project_name", projectName);
       formData.append("additional_context", additionalContext);
@@ -797,6 +806,9 @@ export function TaskStoreProvider({ children }) {
 
   const runGraphBuild = async () => {
     const { projectId, graphName, chunkSize, chunkOverlap } = state.form;
+    const existingGraphId = String(
+      state.currentProject?.zep_graph_id ?? state.currentProject?.graph_id ?? "",
+    ).trim();
     if (!projectId.trim()) {
       addSystemLog("Validation failed: project_id is required.");
       dispatch({
@@ -824,8 +836,9 @@ export function TaskStoreProvider({ children }) {
     const resolvedChunkSize = normalizePositiveInteger(chunkSize, 500);
     const fallbackOverlap = normalizeNonNegativeInteger(chunkOverlap, 50);
     const resolvedChunkOverlap = Math.min(fallbackOverlap, Math.max(resolvedChunkSize - 1, 0));
+    const graphModeLabel = existingGraphId ? `existing graph_id: ${existingGraphId}` : "new graph";
     addSystemLog(
-      `Starting graph build for ${projectId} (graph name: ${resolvedGraphName}, chunk_size: ${resolvedChunkSize}, chunk_overlap: ${resolvedChunkOverlap})...`,
+      `Starting graph build for ${projectId} (${graphModeLabel}, graph name: ${resolvedGraphName}, chunk_size: ${resolvedChunkSize}, chunk_overlap: ${resolvedChunkOverlap})...`,
     );
 
     try {
@@ -834,6 +847,7 @@ export function TaskStoreProvider({ children }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           project_id: projectId,
+          graph_id: existingGraphId || undefined,
           graph_name: resolvedGraphName,
           chunk_size: resolvedChunkSize,
           chunk_overlap: resolvedChunkOverlap,

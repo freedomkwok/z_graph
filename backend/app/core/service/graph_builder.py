@@ -47,6 +47,7 @@ class GraphBuilderService:
         ontology: dict[str, Any],
         graph_name: str = "imp Graph",
         project_id: str | None = None,
+        graph_id: str | None = None,
         chunk_size: int = 500,
         chunk_overlap: int = 50,
         batch_size: int = 3,
@@ -63,7 +64,17 @@ class GraphBuilderService:
 
         thread = threading.Thread(
             target=self._build_graph,
-            args=(task_id, text, ontology, graph_name, project_id, chunk_size, chunk_overlap, batch_size),
+            args=(
+                task_id,
+                text,
+                ontology,
+                graph_name,
+                project_id,
+                graph_id,
+                chunk_size,
+                chunk_overlap,
+                batch_size,
+            ),
         )
         thread.daemon = True
         thread.start()
@@ -77,6 +88,7 @@ class GraphBuilderService:
         ontology: dict[str, Any],
         graph_name: str,
         project_id: str | None,
+        graph_id: str | None,
         chunk_size: int,
         chunk_overlap: int,
         batch_size: int,
@@ -86,7 +98,11 @@ class GraphBuilderService:
                 task_id, status=TaskStatus.PROCESSING, progress=5, message="Start building graph..."
             )
 
-            graph_id, project_workspace_id = self.create_graph(graph_name, project_id=project_id)
+            graph_id, project_workspace_id = self.create_graph(
+                graph_name,
+                project_id=project_id,
+                graph_id=graph_id,
+            )
             self.task_manager.update_task(
                 task_id, progress=10, message=f"Graph created: {graph_id}"
             )
@@ -152,37 +168,38 @@ class GraphBuilderService:
         normalized_workspace_id = str(workspace_id).strip()
         return normalized_workspace_id or None
 
-    def create_graph(self, name: str, project_id: str | None = None) -> tuple[str, str | None]:
-        """Create a Zep graph (public API)."""
+    def create_graph(
+        self,
+        name: str,
+        project_id: str | None = None,
+        graph_id: str | None = None,
+    ) -> tuple[str, str | None]:
+        """
+        Create a new graph or reuse an existing graph by ID.
+
+        Rules:
+        1) If graph_id is provided, do NOT create. Reuse via update only.
+        2) If graph_id is missing, create a new graph_id (project_id fallback, else random).
+        """
+        normalized_graph_id = str(graph_id or "").strip()
         normalized_project_id = str(project_id or "").strip()
-        graph_id = normalized_project_id or f"imp_{uuid.uuid4().hex[:16]}"
 
-        if normalized_project_id:
-            try:
-                created_graph = self.client.graph.create(
-                    graph_id=graph_id, name=name, description="Zep Graph"
-                )
-                return graph_id, self._extract_project_workspace_id(created_graph)
-            except Exception as error:
-                status_code = getattr(error, "status_code", None)
-                error_text = str(error).lower()
-                already_exists = (
-                    status_code == 409
-                    or "already exists" in error_text
-                    or "already_exist" in error_text
-                    or "conflict" in error_text
-                )
-                if not already_exists:
-                    raise
+        if normalized_graph_id:
+            # Existing graph: keep ID and append newly extracted entities/edges on subsequent add_batch calls.
+            updated_graph = self.client.graph.update(
+                graph_id=normalized_graph_id,
+                name=name,
+                description="Zep Graph",
+            )
+            return normalized_graph_id, self._extract_project_workspace_id(updated_graph)
 
-                updated_graph = self.client.graph.update(
-                    graph_id=graph_id, name=name, description="Zep Graph"
-                )
-                return graph_id, self._extract_project_workspace_id(updated_graph)
-
-        created_graph = self.client.graph.create(graph_id=graph_id, name=name, description="Zep Graph")
-
-        return graph_id, self._extract_project_workspace_id(created_graph)
+        new_graph_id = normalized_project_id or f"imp_{uuid.uuid4().hex[:16]}"
+        created_graph = self.client.graph.create(
+            graph_id=new_graph_id,
+            name=name,
+            description="Zep Graph",
+        )
+        return new_graph_id, self._extract_project_workspace_id(created_graph)
 
     def set_ontology(self, graph_id: str, ontology: dict[str, Any]):
         """Apply ontology to the graph (public API)."""
