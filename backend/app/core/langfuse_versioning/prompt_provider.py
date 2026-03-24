@@ -23,6 +23,13 @@ def _normalize_backend(value: str | None) -> str:
     return (value or "file").strip().lower()
 
 
+def _normalize_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
 def is_prompt_versioning() -> bool:
     backend = _normalize_backend(_setting("prompt_backend", "file"))
     return backend in {"langfuse", "lanfuse"}
@@ -140,7 +147,7 @@ class LangfusePromptProvider(PromptProvider):
             raise RuntimeError("Langfuse prompt provider is not configured")
 
         prompt_name = name.replace(".md", "").strip("/")
-        effective_label = label or _setting("prompt_label", None) or None
+        effective_label = _normalize_label(label or _setting("prompt_label", None))
         cache_key = _build_prompt_cache_key(
             prompt_name=prompt_name,
             label=effective_label,
@@ -242,15 +249,37 @@ class FallbackPromptProvider(PromptProvider):
         version: int | None = None,
         **vars: Any,
     ) -> str:
-        try:
-            return self.primary.get(name, label=label, version=version, **vars)
-        except Exception as exc:
-            logger.warning(
-                "Primary prompt provider failed for '%s', fallback to local file: %s",
-                name,
-                str(exc),
-            )
-            return self.fallback.get(name, label=label, version=version, **vars)
+        requested_label = _normalize_label(label)
+        default_label = _normalize_label(_setting("prompt_label", "production"))
+        label_candidates: list[str | None] = []
+
+        def add_candidate(candidate: str | None) -> None:
+            if candidate not in label_candidates:
+                label_candidates.append(candidate)
+
+        if requested_label is not None:
+            add_candidate(requested_label)
+        if default_label is not None:
+            add_candidate(default_label)
+        if not label_candidates:
+            add_candidate(None)
+
+        last_exc: Exception | None = None
+        for candidate in label_candidates:
+            try:
+                return self.primary.get(name, label=candidate, version=version, **vars)
+            except Exception as exc:
+                last_exc = exc
+                continue
+
+        logger.warning(
+            "Primary prompt provider failed for '%s' (labels=%s), fallback to local file: %s",
+            name,
+            ",".join(str(item) for item in label_candidates),
+            str(last_exc),
+        )
+        fallback_label = label_candidates[-1]
+        return self.fallback.get(name, label=fallback_label, version=version, **vars)
 
 
 def _build_prompt_cache_key(

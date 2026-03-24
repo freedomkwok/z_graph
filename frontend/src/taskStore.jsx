@@ -1,9 +1,71 @@
 import { createContext, useContext, useEffect, useReducer, useRef } from "react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
+const LAST_PROJECT_ID_KEY = "zep_graph.last_project_id";
+const resolveBackendUrl = () => {
+  if (API_BASE_URL) return API_BASE_URL;
+  if (typeof window !== "undefined") {
+    const { protocol, hostname, port } = window.location;
+    if (port === "5173" || port === "4173") {
+      return `${protocol}//${hostname}:8000`;
+    }
+    return `${protocol}//${hostname}${port ? `:${port}` : ""}`;
+  }
+  return "http://localhost:8000";
+};
+const BACKEND_DISPLAY_URL = resolveBackendUrl();
 
 const withApiBase = (path) => `${API_BASE_URL}${path}`;
 const MAX_SYSTEM_LOGS = 200;
+
+function normalizeProjectId(value) {
+  return String(value ?? "").trim();
+}
+
+function normalizePositiveInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function normalizeNonNegativeInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function normalizePromptLabel(value) {
+  const normalized = String(value ?? "").trim();
+  return normalized || "Production";
+}
+
+function rememberLastProjectId(projectId) {
+  if (typeof window === "undefined") return;
+  const normalized = normalizeProjectId(projectId);
+  if (normalized) {
+    window.localStorage.setItem(LAST_PROJECT_ID_KEY, normalized);
+  } else {
+    window.localStorage.removeItem(LAST_PROJECT_ID_KEY);
+  }
+}
+
+function readLastProjectId() {
+  if (typeof window === "undefined") return "";
+  return normalizeProjectId(window.localStorage.getItem(LAST_PROJECT_ID_KEY));
+}
+
+function getPreferredPromptLabel(catalogItems, desiredLabel) {
+  const normalizedDesired = normalizePromptLabel(desiredLabel);
+  const labels = Array.isArray(catalogItems) ? catalogItems : [];
+  if (!labels.length) return normalizedDesired || "Production";
+  const hasDesired = labels.some(
+    (item) => String(item?.name ?? "").toLowerCase() === normalizedDesired.toLowerCase(),
+  );
+  if (hasDesired) return normalizedDesired;
+  const production = labels.find(
+    (item) => String(item?.name ?? "").toLowerCase() === "production",
+  );
+  if (production?.name) return String(production.name);
+  return String(labels[0]?.name ?? "Production");
+}
 
 const initialOntologyTask = {
   status: "idle",
@@ -27,6 +89,7 @@ const initialState = {
   backendHealth: {
     loading: false,
     online: false,
+    url: BACKEND_DISPLAY_URL,
     environment: "-",
     zepConfigured: false,
     message: "Not checked",
@@ -37,13 +100,23 @@ const initialState = {
     simulationRequirement: "",
     projectName: "IMP Graph Project",
     additionalContext: "",
+    promptLabel: "Production",
+    graphName: "",
+    chunkSize: 500,
+    chunkOverlap: 50,
     projectId: "",
+  },
+  promptLabelCatalog: {
+    loading: false,
+    error: "",
+    items: [],
   },
   projectCatalog: {
     loading: false,
     error: "",
     items: [],
   },
+  currentProject: null,
   ontologyTask: initialOntologyTask,
   graphTask: initialGraphTask,
   systemLogs: [],
@@ -165,10 +238,32 @@ function taskReducer(state, action) {
         ...state,
         form: { ...state.form, ...action.payload },
       };
+    case "SET_PROMPT_LABEL_CATALOG":
+      return {
+        ...state,
+        promptLabelCatalog: action.payload,
+      };
+    case "PATCH_PROMPT_LABEL_CATALOG":
+      return {
+        ...state,
+        promptLabelCatalog: { ...state.promptLabelCatalog, ...action.payload },
+      };
     case "SET_PROJECT_CATALOG":
       return {
         ...state,
         projectCatalog: action.payload,
+      };
+    case "SET_CURRENT_PROJECT":
+      return {
+        ...state,
+        currentProject: action.payload,
+      };
+    case "PATCH_CURRENT_PROJECT":
+      return {
+        ...state,
+        currentProject: state.currentProject
+          ? { ...state.currentProject, ...action.payload }
+          : action.payload,
       };
     case "PATCH_PROJECT_CATALOG":
       return {
@@ -235,13 +330,92 @@ export function TaskStoreProvider({ children }) {
     dispatch({ type: "SET_FORM_FIELDS", payload: fields });
   };
 
+  const fetchPromptLabels = async ({ syncFormLabel = true } = {}) => {
+    dispatch({
+      type: "PATCH_PROMPT_LABEL_CATALOG",
+      payload: { loading: true, error: "" },
+    });
+    try {
+      const response = await fetch(withApiBase("/api/prompt-label/list"));
+      const payload = await response.json();
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.error ?? "Failed to list prompt labels");
+      }
+      const labels = Array.isArray(payload?.data) ? payload.data : [];
+      dispatch({
+        type: "SET_PROMPT_LABEL_CATALOG",
+        payload: { loading: false, error: "", items: labels },
+      });
+      if (syncFormLabel) {
+        const nextPromptLabel = getPreferredPromptLabel(labels, state.form.promptLabel);
+        setFormField("promptLabel", nextPromptLabel);
+      }
+      return labels;
+    } catch (error) {
+      dispatch({
+        type: "PATCH_PROMPT_LABEL_CATALOG",
+        payload: { loading: false, error: String(error) },
+      });
+      addSystemLog(`Exception in listPromptLabels: ${String(error)}`);
+      return [];
+    }
+  };
+
+  const createPromptLabel = async (name) => {
+    const normalizedName = String(name ?? "").trim();
+    if (!normalizedName) {
+      throw new Error("Label name is required");
+    }
+    const response = await fetch(withApiBase("/api/prompt-label"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: normalizedName }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload?.success) {
+      throw new Error(payload?.error ?? "Failed to create prompt label");
+    }
+    await fetchPromptLabels({ syncFormLabel: false });
+    addSystemLog(`Prompt label saved: ${payload?.data?.name ?? normalizedName}`);
+    return payload?.data;
+  };
+
+  const deletePromptLabel = async (name) => {
+    const normalizedName = String(name ?? "").trim();
+    if (!normalizedName) {
+      throw new Error("Label name is required");
+    }
+    const response = await fetch(withApiBase(`/api/prompt-label/${encodeURIComponent(normalizedName)}`), {
+      method: "DELETE",
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload?.success) {
+      throw new Error(payload?.error ?? "Failed to delete prompt label");
+    }
+    const labels = await fetchPromptLabels({ syncFormLabel: false });
+    const nextPromptLabel = getPreferredPromptLabel(labels, state.form.promptLabel);
+    if (nextPromptLabel !== state.form.promptLabel) {
+      setFormField("promptLabel", nextPromptLabel);
+    }
+    addSystemLog(`Prompt label deleted: ${normalizedName}`);
+    return true;
+  };
+
   async function switchProject(projectId) {
     const selectedProjectId = (projectId ?? "").trim();
     setFormField("projectId", selectedProjectId);
+    rememberLastProjectId(selectedProjectId);
 
     if (!selectedProjectId) {
       dispatch({ type: "SET_ONTOLOGY_TASK", payload: initialOntologyTask });
       dispatch({ type: "SET_GRAPH_TASK", payload: initialGraphTask });
+      dispatch({ type: "SET_CURRENT_PROJECT", payload: null });
+      setFormFields({
+        promptLabel: getPreferredPromptLabel(state.promptLabelCatalog.items, state.form.promptLabel),
+        graphName: "",
+        chunkSize: 500,
+        chunkOverlap: 50,
+      });
       lastPolledTaskMessageRef.current = "";
       addSystemLog("No project selected.");
       return;
@@ -256,10 +430,18 @@ export function TaskStoreProvider({ children }) {
       }
 
       const project = payload.data;
+      dispatch({ type: "SET_CURRENT_PROJECT", payload: project });
       setFormFields({
         projectId: project.project_id ?? selectedProjectId,
         projectName: project.name ?? "IMP Graph Project",
         simulationRequirement: project.context_requirement ?? "",
+        graphName: "",
+        chunkSize: normalizePositiveInteger(project.chunk_size, 500),
+        chunkOverlap: normalizeNonNegativeInteger(project.chunk_overlap, 50),
+        promptLabel: getPreferredPromptLabel(
+          state.promptLabelCatalog.items,
+          project.prompt_label ?? state.form.promptLabel,
+        ),
       });
 
       dispatch({
@@ -268,9 +450,10 @@ export function TaskStoreProvider({ children }) {
       });
 
       let nextGraphTask = getGraphTaskFromProject(project);
-      if (project?.status === "graph_completed" && project?.graph_id) {
+      const projectGraphId = project?.zep_graph_id ?? project?.graph_id ?? "";
+      if (project?.status === "graph_completed" && projectGraphId) {
         try {
-          const graphResponse = await fetch(withApiBase(`/api/data/${project.graph_id}`));
+          const graphResponse = await fetch(withApiBase(`/api/data/${projectGraphId}`));
           const graphPayload = await graphResponse.json();
           if (graphResponse.ok && graphPayload?.success && graphPayload?.data) {
             const graphData = graphPayload.data;
@@ -332,20 +515,27 @@ export function TaskStoreProvider({ children }) {
 
       const requested = preferredProjectId ?? "";
       const selectedFromState = state.form.projectId ?? "";
+      const rememberedProjectId = readLastProjectId();
       const hasRequested = requested && projects.some((p) => p.project_id === requested);
       const hasSelected = selectedFromState && projects.some((p) => p.project_id === selectedFromState);
+      const hasRemembered =
+        rememberedProjectId && projects.some((p) => p.project_id === rememberedProjectId);
 
       let nextProjectId = "";
       if (hasRequested) {
         nextProjectId = requested;
       } else if (hasSelected) {
         nextProjectId = selectedFromState;
+      } else if (hasRemembered) {
+        nextProjectId = rememberedProjectId;
       } else if (projects.length > 0) {
         nextProjectId = projects[0].project_id;
       }
 
       if (nextProjectId) {
         await switchProject(nextProjectId);
+      } else {
+        rememberLastProjectId("");
       }
       return projects;
     } catch (error) {
@@ -363,30 +553,97 @@ export function TaskStoreProvider({ children }) {
     await fetchProjects(state.form.projectId, false);
   };
 
+  const updateProjectName = async (projectId, name) => {
+    const normalizedProjectId = normalizeProjectId(projectId);
+    const normalizedName = String(name ?? "").trim();
+    if (!normalizedProjectId) {
+      throw new Error("project_id is required");
+    }
+    if (!normalizedName) {
+      throw new Error("Project name is required");
+    }
+
+    addSystemLog(`Updating project name for ${normalizedProjectId}...`);
+    const response = await fetch(withApiBase(`/api/project/${normalizedProjectId}`), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: normalizedName }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload?.success) {
+      throw new Error(payload?.error ?? "Failed to update project name");
+    }
+
+    const updatedProject = payload?.data;
+    if (updatedProject?.project_id === state.form.projectId) {
+      setFormField("projectName", updatedProject?.name ?? normalizedName);
+    }
+    await fetchProjects(state.form.projectId, false);
+    addSystemLog(`Project updated: ${normalizedProjectId}`);
+    return updatedProject;
+  };
+
+  const deleteProject = async (projectId) => {
+    const normalizedProjectId = normalizeProjectId(projectId);
+    if (!normalizedProjectId) {
+      throw new Error("project_id is required");
+    }
+
+    addSystemLog(`Deleting project ${normalizedProjectId}...`);
+    const response = await fetch(withApiBase(`/api/project/${normalizedProjectId}`), {
+      method: "DELETE",
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload?.success) {
+      throw new Error(payload?.error ?? "Failed to delete project");
+    }
+
+    if (normalizedProjectId === state.form.projectId) {
+      await switchProject("");
+    }
+    await fetchProjects(undefined, true);
+    addSystemLog(`Project deleted: ${normalizedProjectId}`);
+    return true;
+  };
+
+  const setProjectPromptLabel = async (label) => {
+    const normalizedLabel = getPreferredPromptLabel(state.promptLabelCatalog.items, label);
+    setFormField("promptLabel", normalizedLabel);
+    const projectId = normalizeProjectId(state.form.projectId);
+    if (!projectId) return;
+
+    try {
+      const response = await fetch(withApiBase(`/api/project/${projectId}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt_label: normalizedLabel }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.error ?? "Failed to update project prompt label");
+      }
+      dispatch({
+        type: "PATCH_CURRENT_PROJECT",
+        payload: { prompt_label: normalizedLabel },
+      });
+      await fetchProjects(projectId, false);
+      addSystemLog(`Project prompt label updated: ${projectId} -> ${normalizedLabel}`);
+    } catch (error) {
+      addSystemLog(`Failed to save project prompt label: ${String(error)}`);
+    }
+  };
+
   const checkBackendHealth = async () => {
     dispatch({ type: "PATCH_BACKEND_HEALTH", payload: { loading: true } });
     try {
-      const [healthResponse, projectsResponse] = await Promise.all([
-        fetch(withApiBase("/api/health"), {
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-        }),
-        fetch(withApiBase("/api/project/list?limit=1"), {
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-        }),
-      ]);
-
-      const [healthData, projectsData] = await Promise.all([
-        parseJsonResponse(healthResponse, "/api/health"),
-        parseJsonResponse(projectsResponse, "/api/project/list"),
-      ]);
+      const healthResponse = await fetch(withApiBase("/api/health"), {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+      const healthData = await parseJsonResponse(healthResponse, "/api/health");
 
       if (!healthResponse.ok) {
         throw new Error(healthData?.error ?? "Health check failed");
-      }
-      if (!projectsResponse.ok) {
-        throw new Error(projectsData?.error ?? "Project list check failed");
       }
 
       const hasExpectedHealthShape =
@@ -395,11 +652,24 @@ export function TaskStoreProvider({ children }) {
         (Object.prototype.hasOwnProperty.call(healthData, "zep_configured") ||
           Object.prototype.hasOwnProperty.call(healthData, "zepConfigured"));
 
-      const hasExpectedProjectsShape =
-        projectsData?.success === true && Array.isArray(projectsData?.data);
-
-      if (!hasExpectedHealthShape || !hasExpectedProjectsShape) {
+      if (!hasExpectedHealthShape) {
         throw new Error("Health endpoint reachable, but payload is not zep_graph backend");
+      }
+
+      let message = "Healthy";
+      try {
+        const projectsResponse = await fetch(withApiBase("/api/project/list?limit=1"), {
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
+        const projectsData = await parseJsonResponse(projectsResponse, "/api/project/list");
+        const hasExpectedProjectsShape =
+          projectsResponse.ok && projectsData?.success === true && Array.isArray(projectsData?.data);
+        if (!hasExpectedProjectsShape) {
+          message = "Healthy (project API check warning)";
+        }
+      } catch {
+        message = "Healthy (project API check warning)";
       }
 
       dispatch({
@@ -407,9 +677,10 @@ export function TaskStoreProvider({ children }) {
         payload: {
           loading: false,
           online: true,
+          url: BACKEND_DISPLAY_URL,
           environment: healthData.environment ?? "-",
           zepConfigured: Boolean(healthData.zep_configured ?? healthData.zepConfigured),
-          message: "Healthy",
+          message,
         },
       });
     } catch (error) {
@@ -419,6 +690,7 @@ export function TaskStoreProvider({ children }) {
         payload: {
           loading: false,
           online: false,
+          url: BACKEND_DISPLAY_URL,
           environment: "-",
           zepConfigured: false,
           message: String(error),
@@ -428,7 +700,7 @@ export function TaskStoreProvider({ children }) {
   };
 
   const runOntologyGenerate = async () => {
-    const { simulationRequirement, files, projectName, additionalContext } = state.form;
+    const { simulationRequirement, files, projectName, additionalContext, promptLabel } = state.form;
 
     if (!simulationRequirement.trim()) {
       addSystemLog("Validation failed: simulation requirement is required.");
@@ -466,6 +738,10 @@ export function TaskStoreProvider({ children }) {
       formData.append("simulation_requirement", simulationRequirement);
       formData.append("project_name", projectName);
       formData.append("additional_context", additionalContext);
+      formData.append(
+        "prompt_label",
+        getPreferredPromptLabel(state.promptLabelCatalog.items, promptLabel),
+      );
 
       const response = await fetch(withApiBase("/api/ontology/generate"), {
         method: "POST",
@@ -481,7 +757,14 @@ export function TaskStoreProvider({ children }) {
       const entityTypes = payload?.data?.ontology?.entity_types?.length ?? 0;
       const edgeTypes = payload?.data?.ontology?.edge_types?.length ?? 0;
 
-      dispatch({ type: "SET_FORM_FIELD", field: "projectId", value: nextProjectId });
+      dispatch({
+        type: "SET_FORM_FIELDS",
+        payload: {
+          projectId: nextProjectId,
+          graphName: "",
+        },
+      });
+      rememberLastProjectId(nextProjectId);
       dispatch({
         type: "SET_ONTOLOGY_TASK",
         payload: {
@@ -501,6 +784,7 @@ export function TaskStoreProvider({ children }) {
           taskId: "",
         },
       });
+      await switchProject(nextProjectId);
       await fetchProjects(nextProjectId, false);
     } catch (error) {
       addSystemLog(`Exception in generateOntology: ${String(error)}`);
@@ -512,7 +796,7 @@ export function TaskStoreProvider({ children }) {
   };
 
   const runGraphBuild = async () => {
-    const { projectId } = state.form;
+    const { projectId, graphName, chunkSize, chunkOverlap } = state.form;
     if (!projectId.trim()) {
       addSystemLog("Validation failed: project_id is required.");
       dispatch({
@@ -536,13 +820,24 @@ export function TaskStoreProvider({ children }) {
         chunkCount: 0,
       },
     });
-    addSystemLog(`Starting graph build for ${projectId}...`);
+    const resolvedGraphName = String(graphName ?? "").trim() || projectId;
+    const resolvedChunkSize = normalizePositiveInteger(chunkSize, 500);
+    const fallbackOverlap = normalizeNonNegativeInteger(chunkOverlap, 50);
+    const resolvedChunkOverlap = Math.min(fallbackOverlap, Math.max(resolvedChunkSize - 1, 0));
+    addSystemLog(
+      `Starting graph build for ${projectId} (graph name: ${resolvedGraphName}, chunk_size: ${resolvedChunkSize}, chunk_overlap: ${resolvedChunkOverlap})...`,
+    );
 
     try {
       const response = await fetch(withApiBase("/api/build"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project_id: projectId }),
+        body: JSON.stringify({
+          project_id: projectId,
+          graph_name: resolvedGraphName,
+          chunk_size: resolvedChunkSize,
+          chunk_overlap: resolvedChunkOverlap,
+        }),
       });
       const payload = await response.json();
 
@@ -578,7 +873,9 @@ export function TaskStoreProvider({ children }) {
   useEffect(() => {
     addSystemLog("Project view initialized.");
     checkBackendHealth();
-    fetchProjects(undefined, true);
+    fetchPromptLabels({ syncFormLabel: true }).then(() => {
+      fetchProjects(undefined, true);
+    });
     const timer = setInterval(checkBackendHealth, 30000);
     return () => clearInterval(timer);
   }, []);
@@ -606,6 +903,7 @@ export function TaskStoreProvider({ children }) {
         }
 
         if (task.status === "completed") {
+          const completedGraphId = task.result?.zep_graph_id ?? task.result?.graph_id ?? "";
           dispatch({
             type: "PATCH_GRAPH_TASK",
             payload: {
@@ -618,6 +916,17 @@ export function TaskStoreProvider({ children }) {
               chunkCount: task.result?.chunk_count ?? 0,
             },
           });
+          if (completedGraphId) {
+            dispatch({
+              type: "PATCH_CURRENT_PROJECT",
+              payload: {
+                graph_id: completedGraphId,
+                zep_graph_id: completedGraphId,
+                zep_graph_address: task.result?.zep_graph_address ?? "",
+                status: "graph_completed",
+              },
+            });
+          }
           addSystemLog("Graph build completed.");
           fetchProjects(state.form.projectId, false);
           return;
@@ -672,10 +981,16 @@ export function TaskStoreProvider({ children }) {
     setViewMode,
     refreshGraphFrame,
     setFormField,
+    fetchPromptLabels,
+    createPromptLabel,
+    deletePromptLabel,
+    setProjectPromptLabel,
     setFiles,
     switchProject,
     fetchProjects,
     refreshProjects,
+    updateProjectName,
+    deleteProject,
     checkBackendHealth,
     runOntologyGenerate,
     runGraphBuild,

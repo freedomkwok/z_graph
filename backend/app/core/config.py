@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     langfuse_base_url: str | None = None
     zep_api_key: str | None = None
     zep_api_url: str | None = None
+    zep_graph_url_template: str | None = None
+    zep_core: str | None = None
+    graphdb_uri: str | None = None
+    graphdb_user: str | None = None
+    graphdb_password: str | None = None
 
     @property
     def database_url(self) -> str:
@@ -112,3 +117,9 @@ class Config:
 
     ZEP_API_KEY = settings.zep_api_key
     ZEP_API_URL = settings.zep_api_url
+    ZEP_GRAPH_URL_TEMPLATE = settings.zep_graph_url_template
+    ZEP_CORE = settings.zep_core
+
+    GRAPHDB_URI = settings.graphdb_uri
+    GRAPHDB_USER = settings.graphdb_user
+    GRAPHDB_PASSWORD = settings.graphdb_password

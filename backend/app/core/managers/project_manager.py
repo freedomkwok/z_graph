@@ -108,6 +108,10 @@ class ProjectManager:
                 created_at=project.created_at,
                 updated_at=project.updated_at,
                 project_data=project.to_dict(),
+                zep_graph_id=project.zep_graph_id,
+                project_workspace_id=project.project_workspace_id,
+                zep_graph_address=project.zep_graph_address,
+                prompt_label=project.prompt_label,
             )
             return
 

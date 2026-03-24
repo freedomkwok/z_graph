@@ -56,24 +56,45 @@ def upsert_project(
     created_at: str,
     updated_at: str,
     project_data: dict[str, Any],
+    zep_graph_id: str | None = None,
+    project_workspace_id: str | None = None,
+    zep_graph_address: str | None = None,
+    prompt_label: str | None = None,
 ) -> None:
     with _connect_postgres(connection_string) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO projects (project_id, created_at, updated_at, project_data)
-                VALUES (%s, %s, %s, %s::jsonb)
+                INSERT INTO projects (
+                    project_id,
+                    created_at,
+                    updated_at,
+                    project_data,
+                    zep_graph_id,
+                    project_workspace_id,
+                    zep_graph_address,
+                    prompt_label
+                )
+                VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s)
                 ON CONFLICT (project_id)
                 DO UPDATE SET
                     created_at = EXCLUDED.created_at,
                     updated_at = EXCLUDED.updated_at,
-                    project_data = EXCLUDED.project_data
+                    project_data = EXCLUDED.project_data,
+                    zep_graph_id = EXCLUDED.zep_graph_id,
+                    project_workspace_id = EXCLUDED.project_workspace_id,
+                    zep_graph_address = EXCLUDED.zep_graph_address,
+                    prompt_label = EXCLUDED.prompt_label
                 """,
                 (
                     project_id,
                     created_at,
                     updated_at,
                     json.dumps(project_data, ensure_ascii=False),
+                    zep_graph_id,
+                    project_workspace_id,
+                    zep_graph_address,
+                    prompt_label,
                 ),
             )
         conn.commit()
@@ -83,7 +104,11 @@ def get_project_data(connection_string: str, project_id: str) -> dict[str, Any] 
     with _connect_postgres(connection_string) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT project_data FROM projects WHERE project_id = %s",
+                """
+                SELECT project_data, zep_graph_id, project_workspace_id, zep_graph_address, prompt_label
+                FROM projects
+                WHERE project_id = %s
+                """,
                 (project_id,),
             )
             row = cur.fetchone()
@@ -91,7 +116,20 @@ def get_project_data(connection_string: str, project_id: str) -> dict[str, Any] 
     if not row:
         return None
 
-    return _decode_project_data(row[0])
+    project_data = _decode_project_data(row[0])
+    zep_graph_id = row[1]
+    project_workspace_id = row[2]
+    zep_graph_address = row[3]
+    prompt_label = row[4]
+    if zep_graph_id and not project_data.get("zep_graph_id"):
+        project_data["zep_graph_id"] = zep_graph_id
+    if project_workspace_id and not project_data.get("project_workspace_id"):
+        project_data["project_workspace_id"] = project_workspace_id
+    if zep_graph_address and not project_data.get("zep_graph_address"):
+        project_data["zep_graph_address"] = zep_graph_address
+    if prompt_label and not project_data.get("prompt_label"):
+        project_data["prompt_label"] = prompt_label
+    return project_data
 
 
 def list_projects_data(connection_string: str, limit: int) -> list[dict[str, Any]]:
@@ -99,7 +137,7 @@ def list_projects_data(connection_string: str, limit: int) -> list[dict[str, Any
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT project_data
+                SELECT project_data, zep_graph_id, project_workspace_id, zep_graph_address, prompt_label
                 FROM projects
                 ORDER BY created_at DESC
                 LIMIT %s
@@ -108,7 +146,23 @@ def list_projects_data(connection_string: str, limit: int) -> list[dict[str, Any
             )
             rows = cur.fetchall()
 
-    return [_decode_project_data(row[0]) for row in rows]
+    projects: list[dict[str, Any]] = []
+    for row in rows:
+        project_data = _decode_project_data(row[0])
+        zep_graph_id = row[1]
+        project_workspace_id = row[2]
+        zep_graph_address = row[3]
+        prompt_label = row[4]
+        if zep_graph_id and not project_data.get("zep_graph_id"):
+            project_data["zep_graph_id"] = zep_graph_id
+        if project_workspace_id and not project_data.get("project_workspace_id"):
+            project_data["project_workspace_id"] = project_workspace_id
+        if zep_graph_address and not project_data.get("zep_graph_address"):
+            project_data["zep_graph_address"] = zep_graph_address
+        if prompt_label and not project_data.get("prompt_label"):
+            project_data["prompt_label"] = prompt_label
+        projects.append(project_data)
+    return projects
 
 
 def delete_project_data(connection_string: str, project_id: str) -> bool:
@@ -157,3 +211,80 @@ def get_project_extracted_text(connection_string: str, project_id: str) -> str |
         return None
 
     return row[0]
+
+
+def ensure_prompt_label_data(
+    connection_string: str,
+    *,
+    name: str,
+    now_iso: str,
+) -> None:
+    with _connect_postgres(connection_string) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO prompt_labels (name, created_at, updated_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (name)
+                DO UPDATE SET
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (name, now_iso, now_iso),
+            )
+        conn.commit()
+
+
+def list_prompt_labels_data(connection_string: str) -> list[dict[str, Any]]:
+    with _connect_postgres(connection_string) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    labels.name,
+                    labels.created_at,
+                    labels.updated_at,
+                    COUNT(projects.project_id)::INT AS project_count
+                FROM prompt_labels AS labels
+                LEFT JOIN projects
+                    ON projects.prompt_label = labels.name
+                GROUP BY labels.name, labels.created_at, labels.updated_at
+                ORDER BY labels.name ASC
+                """
+            )
+            rows = cur.fetchall()
+
+    return [
+        {
+            "name": row[0],
+            "created_at": row[1],
+            "updated_at": row[2],
+            "project_count": row[3],
+        }
+        for row in rows
+    ]
+
+
+def delete_prompt_label_data(connection_string: str, name: str) -> tuple[bool, str]:
+    with _connect_postgres(connection_string) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*)::INT FROM projects WHERE prompt_label = %s",
+                (name,),
+            )
+            projects_using_label = (cur.fetchone() or [0])[0]
+            if projects_using_label > 0:
+                return (
+                    False,
+                    f"Label '{name}' is used by {projects_using_label} project(s) and cannot be deleted.",
+                )
+
+            cur.execute(
+                "DELETE FROM prompt_labels WHERE name = %s",
+                (name,),
+            )
+            deleted = cur.rowcount > 0
+        conn.commit()
+
+    if deleted:
+        return True, f"Prompt label deleted: {name}"
+    return False, f"Prompt label not found: {name}"

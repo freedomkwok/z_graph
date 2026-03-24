@@ -1,16 +1,23 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/backend"
+    ],
+    "python-envs.defaultEnvManager": "ms-python.python:venv",
     "python-envs.defaultPackageManager": "ms-python.python:pip",
-    "python-envs.pythonProjects": [],
-    "editor.formatOnSave": true,
-    "editor.codeActionsOnSave": {
-        "source.fixAll": "explicit",
-        "source.organizeImports": "explicit"
-    },
-    "[python]": {
-        "editor.defaultFormatter": "charliermarsh.ruff",
-        "editor.formatOnSave": true
-    },
-    "ruff.lint.enable": true,
-    "ruff.organizeImports": true
+    "python-envs.pythonProjects": []
+    // "python-envs.defaultEnvManager": "ms-python.python:system",
+    // "python-envs.defaultPackageManager": "ms-python.python:pip",
+    // "python-envs.pythonProjects": [],
+    // "editor.formatOnSave": true,
+    // "editor.codeActionsOnSave": {
+    //     "source.fixAll": "explicit",
+    //     "source.organizeImports": "explicit"
+    // },
+    // "[python]": {
+    //     "editor.defaultFormatter": "charliermarsh.ruff",
+    //     "editor.formatOnSave": true
+    // },
+    // "ruff.lint.enable": true,
+    // "ruff.organizeImports": true
 }

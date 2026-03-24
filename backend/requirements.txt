@@ -10,3 +10,4 @@ debugpy
 openai
 tenacity
 psycopg[binary]
+pymupdf

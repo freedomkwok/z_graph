@@ -19,11 +19,11 @@ class OntologyGenerator:
     Builds ontology definitions from documents and contextual requirements.
     """
 
-    PROMPT_LABEL = "Production"
-    USER_EXTRACTION_PROMPT_NAME = "USER_EXTRACTION_PROMPT.md"
-    ONTOLOGY_SYSTEM_PROMPT_NAME = "ONTOLOGY_SYSTEM_PROMPT.md"
-    PERSON_FALLBACK_NAME = "person.json"
-    ORGANIZATION_FALLBACK_NAME = "organization.json"
+    DEFAULT_PROMPT_LABEL = "Production"
+    USER_EXTRACTION_PROMPT_NAME = "prompts/USER_EXTRACTION_PROMPT.md"
+    ONTOLOGY_SYSTEM_PROMPT_NAME = "prompts/ONTOLOGY_SYSTEM_PROMPT.md"
+    PERSON_FALLBACK_NAME = "fallback_entities/person.json"
+    ORGANIZATION_FALLBACK_NAME = "fallback_entities/organization.json"
     _PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
 
     def __init__(
@@ -38,13 +38,11 @@ class OntologyGenerator:
             base_url=Config.LLM_BASE_URL,
         )
         base_dir = Path(__file__).resolve().parent.parent / "langfuse_versioning"
-        default_prompts_dir = base_dir / "prompts"
-        default_fallback_entity_dir = base_dir / "fallback_entites"
-        self.prompt_provider = prompt_provider or make_prompt_provider(
-            prompts_dir=default_prompts_dir
-        )
+        # Unified root so keys like prompts/* and fallback_entities/* resolve identically
+        # for both Langfuse and local file fallback.
+        self.prompt_provider = prompt_provider or make_prompt_provider(prompts_dir=base_dir)
         self.fallback_entity_provider = fallback_entity_provider or make_prompt_provider(
-            prompts_dir=default_fallback_entity_dir
+            prompts_dir=base_dir
         )
 
     def generate(
@@ -52,19 +50,24 @@ class OntologyGenerator:
         document_texts: list[str],
         context_requirement: str = "",
         additional_context: str | None = None,
+        prompt_label: str | None = None,
     ) -> dict[str, Any]:
+        effective_prompt_label = self._normalize_prompt_label(prompt_label)
         # Build user message
         user_message = self._build_user_message(
-            document_texts, context_requirement, additional_context
+            document_texts,
+            context_requirement,
+            additional_context,
+            prompt_label=effective_prompt_label,
         )
 
         messages = [
-            {"role": "system", "content": self._get_system_prompt()},
+            {"role": "system", "content": self._get_system_prompt(prompt_label=effective_prompt_label)},
             {"role": "user", "content": user_message},
         ]
 
-        result = self.llm.chat_json(messages=messages, temperature=0.3, max_tokens=4096)
-        result = self._faillback_process(result)
+        result = self.llm.chat_json(messages=messages, temperature=0.3, max_tokens=12096)
+        result = self._faillback_process(result, prompt_label=effective_prompt_label)
 
         return result
 
@@ -72,7 +75,11 @@ class OntologyGenerator:
     MAX_TEXT_LENGTH_FOR_LLM = 50000
 
     def _build_user_message(
-        self, document_texts: list[str], context_requirement: str, additional_context: str | None
+        self,
+        document_texts: list[str],
+        context_requirement: str,
+        additional_context: str | None,
+        prompt_label: str,
     ) -> str:
         """Assemble the user message payload."""
 
@@ -90,30 +97,30 @@ class OntologyGenerator:
 
         return self.prompt_provider.get(
             self.USER_EXTRACTION_PROMPT_NAME,
-            label=self.PROMPT_LABEL,
+            label=prompt_label,
             context_requirement=context_requirement or "Not provided",
             combined_text=combined_text,
             additional_context=additional_context or "Not provided",
         )
 
-    def _get_system_prompt(self) -> str:
+    def _get_system_prompt(self, prompt_label: str) -> str:
         template = self.prompt_provider.get(
             self.ONTOLOGY_SYSTEM_PROMPT_NAME,
-            label=self.PROMPT_LABEL,
+            label=prompt_label,
         )
-        placeholder_vars = self._build_system_prompt_placeholder_vars(template)
-        prompt = self.prompt_provider.get(
-            self.ONTOLOGY_SYSTEM_PROMPT_NAME,
-            label=self.PROMPT_LABEL,
-            **placeholder_vars,
-        )
-        return self._render_dynamic_placeholders(prompt or "", placeholder_vars).strip()
+        placeholder_vars = self._build_system_prompt_placeholder_vars(template, prompt_label=prompt_label)
+        # Single source of truth: render the already-loaded template in-memory.
+        return self._render_dynamic_placeholders(template or "", placeholder_vars).strip()
 
-    def _build_system_prompt_placeholder_vars(self, template: str) -> dict[str, str]:
+    def _build_system_prompt_placeholder_vars(
+        self, template: str, *, prompt_label: str
+    ) -> dict[str, str]:
         placeholder_vars: dict[str, str] = {}
         for key in self._extract_placeholder_keys(template):
-            value = self._load_system_prompt_fragment(key)
+            normalized_key = self._normalize_placeholder_key(key)
+            value = self._load_system_prompt_fragment(normalized_key, prompt_label=prompt_label)
             if value:
+                # Keep original template key so replacement always matches source template.
                 placeholder_vars[key] = value
         return placeholder_vars
 
@@ -134,42 +141,27 @@ class OntologyGenerator:
 
         return self._PLACEHOLDER_PATTERN.sub(replacer, template)
 
-    def _load_system_prompt_fragment(self, placeholder_key: str) -> str:
-        for prompt_name in self._candidate_prompt_names_for_placeholder(placeholder_key):
-            try:
-                fragment = self.prompt_provider.get(prompt_name, label=self.PROMPT_LABEL)
-                fragment = (fragment or "").strip()
-                if fragment:
-                    return fragment
-            except Exception:
-                continue
+    @staticmethod
+    def _normalize_placeholder_key(placeholder_key: str) -> str:
+        normalized = placeholder_key
+        if "ORGANIZATIONS_" in normalized:
+            normalized = normalized.replace("ORGANIZATIONS_", "ORGANIZATION_", 1)
+        if "ENTITIES_" in normalized:
+            normalized = normalized.replace("ENTITIES_", "ENTITES_", 1)
+        return normalized
+
+    def _load_system_prompt_fragment(self, placeholder_key: str, *, prompt_label: str) -> str:
+        prompt_name = f"prompts/{placeholder_key}.md"
+        try:
+            fragment = self.prompt_provider.get(prompt_name, label=prompt_label)
+            fragment = (fragment or "").strip()
+            if fragment:
+                return fragment
+        except Exception:
+            return ""
         return ""
 
-    def _candidate_prompt_names_for_placeholder(self, placeholder_key: str) -> list[str]:
-        aliases: list[str] = []
-
-        def add_alias(name: str) -> None:
-            if name and name not in aliases:
-                aliases.append(name)
-
-        add_alias(placeholder_key)
-
-        if "ORGANIZATIONS_" in placeholder_key:
-            add_alias(placeholder_key.replace("ORGANIZATIONS_", "ORGANIZATION_", 1))
-        if "ORGANIZATION_" in placeholder_key:
-            add_alias(placeholder_key.replace("ORGANIZATION_", "ORGANIZATIONS_", 1))
-        if "ENTITIES_" in placeholder_key:
-            add_alias(placeholder_key.replace("ENTITIES_", "ENTITES_", 1))
-        if "ENTITES_" in placeholder_key:
-            add_alias(placeholder_key.replace("ENTITES_", "ENTITIES_", 1))
-
-        names: list[str] = []
-        for alias in aliases:
-            names.append(f"{alias}.md")
-            names.append(f"{alias}.MD")
-        return names
-
-    def _faillback_process(self, result: dict[str, Any]) -> dict[str, Any]:
+    def _faillback_process(self, result: dict[str, Any], *, prompt_label: str) -> dict[str, Any]:
         if "entity_types" not in result:
             result["entity_types"] = []
         if "edge_types" not in result:
@@ -197,8 +189,10 @@ class OntologyGenerator:
         MAX_ENTITY_TYPES = 10
         MAX_EDGE_TYPES = 10
 
-        person_fallback = self._load_fallback_entity(self.PERSON_FALLBACK_NAME)
-        organization_fallback = self._load_fallback_entity(self.ORGANIZATION_FALLBACK_NAME)
+        person_fallback = self._load_fallback_entity(self.PERSON_FALLBACK_NAME, prompt_label=prompt_label)
+        organization_fallback = self._load_fallback_entity(
+            self.ORGANIZATION_FALLBACK_NAME, prompt_label=prompt_label
+        )
 
         entity_names = {e["name"] for e in result["entity_types"]}
         has_person = "Person" in entity_names
@@ -232,14 +226,14 @@ class OntologyGenerator:
 
         return result
 
-    def _load_fallback_entity(self, file_name: str) -> dict[str, Any]:
+    def _load_fallback_entity(self, file_name: str, *, prompt_label: str) -> dict[str, Any]:
         """
         Resolve fallback entity definition:
         1) Prompt provider with label=Production (remote first)
         2) Local JSON via provider fallback
         """
         try:
-            raw = self.fallback_entity_provider.get(file_name, label=self.PROMPT_LABEL)
+            raw = self.fallback_entity_provider.get(file_name, label=prompt_label)
             payload = json.loads(raw)
             if isinstance(payload, dict) and payload.get("name"):
                 payload.setdefault("attributes", [])
@@ -251,3 +245,8 @@ class OntologyGenerator:
             ) from exc
 
         raise ValueError(f"Invalid fallback entity definition format for '{file_name}'")
+
+    @classmethod
+    def _normalize_prompt_label(cls, prompt_label: str | None) -> str:
+        normalized = str(prompt_label or "").strip()
+        return normalized or cls.DEFAULT_PROMPT_LABEL

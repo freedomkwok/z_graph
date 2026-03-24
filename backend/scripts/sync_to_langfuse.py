@@ -92,6 +92,11 @@ def load_default_env(repo_root: Path) -> None:
     load_env_file(repo_root / ".env.example")
 
 
+def normalize_label(label: str) -> str:
+    # Langfuse label pattern: lowercase alphanumeric plus _, -, .
+    return label.strip().lower()
+
+
 def _normalize_source_prefixes(sources: Iterable[str]) -> list[str]:
     prefixes: list[str] = []
     for source in sources:
@@ -313,7 +318,7 @@ def main() -> int:
         or os.getenv("LANGFUSE_HOST")
         or "http://localhost:3000"
     )
-    labels = [label for label in args.label if label]
+    labels = [normalize_label(label) for label in args.label if label and label.strip()]
 
     if not public_key or not secret_key:
         print(

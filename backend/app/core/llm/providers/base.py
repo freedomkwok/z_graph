@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -11,6 +12,8 @@ from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait
 from app.core.config import Config
 from app.core.llm.providers.abstractions import MessageFormatter, ResponseNormalizer
 from app.core.llm.types import LLMRequest, LLMResponse
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class BaseLLMProvider(ABC):
@@ -39,14 +42,62 @@ class BaseLLMProvider(ABC):
     def generate(self, request: LLMRequest) -> LLMResponse:
         started = perf_counter()
         payload = self.formatter.format(request=request, model=self.model)
-        raw_response = self._run_with_retry(lambda: self._invoke(payload))
-        response = self.normalizer.normalize(
-            raw_response=raw_response,
-            provider=self.provider_name,
-            model=self.model,
-        )
-        response.latency_ms = (perf_counter() - started) * 1000
-        return response
+        observation_ctx = None
+        if self.langfuse is not None:
+            try:
+                trace_metadata = {"provider": self.provider_name, **(request.metadata or {})}
+                observation_ctx = self.langfuse.start_as_current_observation(
+                    name=request.operation,
+                    as_type="generation",
+                    model=self.model,
+                    input=payload,
+                    metadata=trace_metadata,
+                )
+            except Exception as exc:
+                logger.warning("Langfuse trace disabled for this call: %s", str(exc))
+
+        if observation_ctx is None:
+            raw_response = self._run_with_retry(lambda: self._invoke(payload))
+            response = self.normalizer.normalize(
+                raw_response=raw_response,
+                provider=self.provider_name,
+                model=self.model,
+            )
+            response.latency_ms = (perf_counter() - started) * 1000
+            return response
+
+        with observation_ctx as observation:
+            try:
+                raw_response = self._run_with_retry(lambda: self._invoke(payload))
+                response = self.normalizer.normalize(
+                    raw_response=raw_response,
+                    provider=self.provider_name,
+                    model=self.model,
+                )
+                response.latency_ms = (perf_counter() - started) * 1000
+                if hasattr(observation, "update"):
+                    usage_payload = None
+                    if response.usage:
+                        usage_payload = {
+                            "input": response.usage.prompt_tokens,
+                            "output": response.usage.completion_tokens,
+                            "total": response.usage.total_tokens,
+                        }
+                    try:
+                        observation.update(
+                            output=response.text,
+                            usage=usage_payload,
+                        )
+                    except Exception:
+                        logger.warning("Failed to update Langfuse generation payload", exc_info=True)
+                return response
+            except Exception as exc:
+                if hasattr(observation, "update"):
+                    try:
+                        observation.update(output={"error": str(exc)})
+                    except Exception:
+                        logger.warning("Failed to update Langfuse error payload", exc_info=True)
+                raise
 
     def chat(
         self,

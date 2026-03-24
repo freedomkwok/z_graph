@@ -24,10 +24,13 @@ class Project:
     ontology: dict[str, Any] | None = None
     analysis_summary: str | None = None
     
-    graph_id: str | None = None
+    zep_graph_id: str | None = None
+    project_workspace_id: str | None = None
+    zep_graph_address: str | None = None
     graph_build_task_id: str | None = None
     
     context_requirement: str | None = None
+    prompt_label: str = "Production"
     chunk_size: int = 500
     chunk_overlap: int = 50
     
@@ -44,9 +47,12 @@ class Project:
             "total_text_length": self.total_text_length,
             "ontology": self.ontology,
             "analysis_summary": self.analysis_summary,
-            "graph_id": self.graph_id,
+            "zep_graph_id": self.zep_graph_id,
+            "project_workspace_id": self.project_workspace_id,
+            "zep_graph_address": self.zep_graph_address,
             "graph_build_task_id": self.graph_build_task_id,
             "context_requirement": self.context_requirement,
+            "prompt_label": self.prompt_label,
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap,
             "error": self.error
@@ -58,6 +64,9 @@ class Project:
         if isinstance(status, str):
             status = ProjectStatus(status)
         
+        zep_graph_id = data.get("zep_graph_id") or data.get("graph_id")
+        project_workspace_id = data.get("project_workspace_id")
+
         return cls(
             project_id=data['project_id'],
             name=data.get('name', 'Unnamed Project'),
@@ -68,9 +77,12 @@ class Project:
             total_text_length=data.get('total_text_length', 0),
             ontology=data.get('ontology'),
             analysis_summary=data.get('analysis_summary'),
-            graph_id=data.get('graph_id'),
+            zep_graph_id=zep_graph_id,
+            project_workspace_id=project_workspace_id,
+            zep_graph_address=data.get("zep_graph_address"),
             graph_build_task_id=data.get('graph_build_task_id'),
             context_requirement=data.get('context_requirement'),
+            prompt_label=data.get("prompt_label", "Production"),
             chunk_size=data.get('chunk_size', 500),
             chunk_overlap=data.get('chunk_overlap', 50),
             error=data.get('error')

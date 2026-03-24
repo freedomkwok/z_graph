@@ -2,12 +2,14 @@ import os
 import shutil
 import threading
 import traceback
-from typing import Any
+from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Body, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.core.config import Config
+from app.core.managers.prompt_label_manager import PromptLabelManager
 from app.core.managers.project_manager import ProjectManager
 from app.core.managers.task_manager import TaskManager
 from app.core.schemas.project import ProjectStatus
@@ -23,6 +25,7 @@ logger = get_logger("zep_graph.api")
 
 DEFAULT_CHUNK_SIZE = 500
 DEFAULT_CHUNK_OVERLAP = 50
+ProjectPatchBody = Annotated[dict[str, Any], Body(default_factory=dict)]
 
 
 class _UploadFileAdapter:
@@ -54,15 +57,25 @@ def allowed_file(filename: str) -> bool:
     return ext in FileParser.SUPPORTED_EXTENSIONS
 
 
-@router.get("/project/{project_id}")
-def get_project(project_id: str) -> Any:
-    project = ProjectManager.get_project(project_id)
-    if not project:
-        return _error_response(404, f"Project not found: {project_id}")
-    return {
-        "success": True,
-        "data": project.to_dict(),
-    }
+def _build_zep_graph_address(graph_id: str, project_workspace_id: str | None = None) -> str:
+    template = str(Config.ZEP_GRAPH_URL_TEMPLATE or "").strip()
+    if template:
+        if "{graph_id}" in template or "{project_workspace_id}" in template:
+            try:
+                return template.format(
+                    graph_id=graph_id,
+                    project_workspace_id=project_workspace_id or "",
+                )
+            except KeyError:
+                return template
+        return template
+    if project_workspace_id:
+        return (
+            "https://app.getzep.com/projects/"
+            f"{quote(project_workspace_id, safe='')}/graphs/{quote(graph_id, safe='')}"
+        )
+    # Fallback keeps existing behavior while carrying graph id for deep-link support.
+    return f"https://app.getzep.com/?graph_id={quote(graph_id, safe='')}"
 
 
 @router.get("/project/list")
@@ -75,6 +88,75 @@ def list_projects(limit: int = Query(default=50, ge=1, le=500)) -> dict[str, Any
     }
 
 
+@router.get("/prompt-label/list")
+def list_prompt_labels() -> dict[str, Any]:
+    labels = PromptLabelManager.list_labels()
+    return {
+        "success": True,
+        "data": labels,
+        "count": len(labels),
+    }
+
+
+@router.post("/prompt-label")
+def create_prompt_label(data: ProjectPatchBody) -> Any:
+    try:
+        name = (data or {}).get("name")
+        label = PromptLabelManager.create_label(str(name or ""))
+        return {
+            "success": True,
+            "message": f"Prompt label saved: {label['name']}",
+            "data": label,
+        }
+    except Exception as exc:
+        return _error_response(400, str(exc), exc)
+
+
+@router.delete("/prompt-label/{label_name}")
+def delete_prompt_label(label_name: str) -> Any:
+    success, message = PromptLabelManager.delete_label(label_name)
+    if not success:
+        return _error_response(409, message)
+    return {
+        "success": True,
+        "message": message,
+    }
+
+
+@router.get("/project/{project_id}")
+def get_project(project_id: str) -> Any:
+    project = ProjectManager.get_project(project_id)
+    if not project:
+        return _error_response(404, f"Project not found: {project_id}")
+    return {
+        "success": True,
+        "data": project.to_dict(),
+    }
+
+
+@router.patch("/project/{project_id}")
+def update_project(project_id: str, data: ProjectPatchBody) -> Any:
+    project = ProjectManager.get_project(project_id)
+    if not project:
+        return _error_response(404, f"Project not found: {project_id}")
+
+    name = str((data or {}).get("name", "")).strip()
+    prompt_label = str((data or {}).get("prompt_label", "")).strip()
+    if not name and not prompt_label:
+        return _error_response(400, "At least one field is required: name or prompt_label")
+
+    if name:
+        project.name = name
+    if prompt_label:
+        project.prompt_label = PromptLabelManager.ensure_label_exists(prompt_label)
+    ProjectManager.save_project(project)
+    return {
+        "success": True,
+        "message": f"Project updated: {project_id}",
+        "data": project.to_dict(),
+    }
+
+
 @router.delete("/project/{project_id}")
 def delete_project(project_id: str) -> Any:
     success = ProjectManager.delete_project(project_id)
@@ -82,7 +164,7 @@ def delete_project(project_id: str) -> Any:
         return _error_response(404, f"Project not found or delete failed: {project_id}")
     return {
         "success": True,
-        "message": f"Porject deleted: {project_id}",
+        "message": f"Project deleted: {project_id}",
     }
 
 
@@ -93,7 +175,9 @@ def reset_project(project_id: str) -> Any:
         return _error_response(404, f"Project not found: {project_id}")
 
     project.status = ProjectStatus.ONTOLOGY_GENERATED if project.ontology else ProjectStatus.CREATED
-    project.graph_id = None
+    project.zep_graph_id = None
+    project.project_workspace_id = None
+    project.zep_graph_address = None
     project.graph_build_task_id = None
     project.error = None
     ProjectManager.save_project(project)
@@ -111,6 +195,7 @@ def generate_ontology(
     simulation_requirement: str = Form(...),
     project_name: str = Form("Unnamed Project"),
     additional_context: str = Form(""),
+    prompt_label: str = Form("Production"),
 ) -> Any:
     try:
         logger.info("----------------Start generating ontology----------------")
@@ -125,6 +210,9 @@ def generate_ontology(
 
         project = ProjectManager.create_project(name=project_name)
         project.context_requirement = requirement
+        project.prompt_label = PromptLabelManager.ensure_label_exists(
+            OntologyGenerator._normalize_prompt_label(prompt_label)
+        )
         logger.info(f"Created Project: {project.project_id}")
 
         document_texts: list[str] = []
@@ -167,6 +255,7 @@ def generate_ontology(
             document_texts=document_texts,
             context_requirement=requirement,
             additional_context=additional_context or None,
+            prompt_label=project.prompt_label,
         )
 
         entity_count = len(ontology.get("entity_types", []))
@@ -234,7 +323,9 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
             ProjectStatus.GRAPH_COMPLETED,
         }:
             project.status = ProjectStatus.ONTOLOGY_GENERATED
-            project.graph_id = None
+            project.zep_graph_id = None
+            project.project_workspace_id = None
+            project.zep_graph_address = None
             project.graph_build_task_id = None
             project.error = None
 
@@ -283,10 +374,16 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                 )
                 total_chunks = len(chunks)
 
-                task_manager.update_task(task_id, message="Creating Zep Graph...", progress=10)
-                graph_id = builder.create_graph(name=graph_name)
+                task_manager.update_task(task_id, message="Creating Zep Graph", progress=10)
+                graph_id, project_workspace_id = builder.create_graph(
+                    name=graph_name, project_id=project_id
+                )
 
-                project.graph_id = graph_id
+                project.zep_graph_id = graph_id
+                project.project_workspace_id = project_workspace_id
+                project.zep_graph_address = _build_zep_graph_address(
+                    graph_id, project_workspace_id=project_workspace_id
+                )
                 ProjectManager.save_project(project)
 
                 task_manager.update_task(task_id, message="Setting Ontology", progress=15)
@@ -308,7 +405,7 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                     progress_callback=add_progress_callback,
                 )
 
-                task_manager.update_task(task_id, message="Waiting for Zep to process data", progress=55)
+                task_manager.update_task(task_id, message="Waiting for Zep to process data", progress=45)
 
                 def wait_progress_callback(message: str, progress_ratio: float) -> None:
                     progress = 55 + int(progress_ratio * 35)
@@ -316,7 +413,7 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
 
                 builder._wait_for_episodes(episode_uuids, wait_progress_callback)
 
-                task_manager.update_task(task_id, message="Getting Graph Data", progress=95)
+                task_manager.update_task(task_id, message="Getting Graph Data", progress=90)
                 graph_data = builder.get_graph_data(graph_id)
 
                 project.status = ProjectStatus.GRAPH_COMPLETED
@@ -335,7 +432,9 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                     progress=100,
                     result={
                         "project_id": project_id,
-                        "graph_id": graph_id,
+                        "zep_graph_id": graph_id,
+                        "project_workspace_id": project_workspace_id,
+                        "zep_graph_address": project.zep_graph_address,
                         "node_count": node_count,
                         "edge_count": edge_count,
                         "chunk_count": total_chunks,

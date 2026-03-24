@@ -15,7 +15,7 @@ function clampRightPanelWidth(desiredWidth, totalWidth) {
   return Math.min(Math.max(desiredWidth, min), max);
 }
 
-export default function MainLayout() {
+export default function MainLayout({ currentPage = "workspace", onNavigate }) {
   const { state } = useTaskStore();
   const workspaceRef = useRef(null);
   const isResizingRef = useRef(false);
@@ -78,7 +78,9 @@ export default function MainLayout() {
   }, [rightPanelWidth]);
 
   const isBothMode = state.viewMode === "both";
-  const workspaceClass = `workspace ${state.viewMode === "backend" ? "backend-only" : ""} ${isBothMode ? "with-splitter" : ""
+  const isBackendOnly = state.viewMode === "backend";
+  const isGraphOnly = state.viewMode === "graph";
+  const workspaceClass = `workspace ${isBackendOnly ? "backend-only" : ""} ${isGraphOnly ? "graph-only" : ""} ${isBothMode ? "with-splitter" : ""
     } ${isResizing ? "is-resizing" : ""}`;
   const workspaceStyle = isBothMode
     ? { gridTemplateColumns: `minmax(0, 1fr) 10px ${rightPanelWidth}px` }
@@ -86,9 +88,9 @@ export default function MainLayout() {
 
   return (
     <div className="app-shell">
-      <TopBar />
+      <TopBar currentPage={currentPage} onNavigate={onNavigate} />
       <main className={workspaceClass} ref={workspaceRef} style={workspaceStyle}>
-        {isBothMode && <GraphEmbedPanel />}
+        {!isGraphOnly && <TaskPanel />}
         {isBothMode && (
           <div
             className="panel-splitter"
@@ -98,7 +100,7 @@ export default function MainLayout() {
             onPointerDown={startResize}
           />
         )}
-        <TaskPanel />
+        {!isBackendOnly && <GraphEmbedPanel />}
       </main>
     </div>
   );

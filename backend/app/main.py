@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from app.application.router import router as application_router
 from app.core.api.router import api_router
 from app.core.config import settings
+from app.core.managers.prompt_label_manager import PromptLabelManager
 from app.core.managers.project_manager import ProjectManager
 
 app = FastAPI(title=settings.app_name)
@@ -32,3 +33,4 @@ else:
 @app.on_event("startup")
 def initialize_project_storage() -> None:
     ProjectManager.initialize_storage()
+    PromptLabelManager.initialize_labels()
