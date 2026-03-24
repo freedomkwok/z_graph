@@ -1,11 +1,10 @@
 import logging
-from functools import lru_cache
 from typing import Optional
 
 from app.core.config import Config
-from app.core.graphiti.schema import ZepClientAdapter
-from app.core.graphiti.zep_cloud_impl import ZepCloudClient
-from app.core.graphiti.zep_graphiti_impl import GraphitiClient
+from app.core.backend_client_factory.schema import ZepClientAdapter
+from app.core.backend_client_factory.zep.zep_client import ZepCloudClient
+from app.core.backend_client_factory.graphiti.graphiti_client import GraphitiClient
 
 logger = logging.getLogger('zep_graph.zep_factory')
 

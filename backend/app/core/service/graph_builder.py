@@ -23,13 +23,53 @@ class GraphBuilderService:
     Calls the Zep API to build the knowledge graph.
     """
 
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, client: Any | None = None):
         self.api_key = api_key or Config.ZEP_API_KEY
         if not self.api_key:
             raise ValueError("ZEP_API_KEY Not Configured")
 
-        self.client: Zep = Zep(api_key=self.api_key)
+        self.client = self._normalize_client(client or Zep(api_key=self.api_key))
+        self._validate_required_graph_api(self.client)
         self.task_manager = TaskManager()
+
+    @staticmethod
+    def _normalize_client(client: Any) -> Any:
+        """Normalize cloud clients to a shape exposing `.graph.*` APIs."""
+        if hasattr(client, "graph"):
+            return client
+
+        inner_client = getattr(client, "client", None)
+        if inner_client is not None and hasattr(inner_client, "graph"):
+            return inner_client
+
+        raise TypeError(
+            "Unsupported Zep client: expected object with `graph` or `client.graph` APIs."
+        )
+
+    @staticmethod
+    def _validate_required_graph_api(client: Any) -> None:
+        """Ensure the client has all graph APIs needed by main build/delete routes."""
+        graph = getattr(client, "graph", None)
+        missing: list[str] = []
+
+        for method_name in ("create", "update", "set_ontology", "add_batch", "delete"):
+            if not callable(getattr(graph, method_name, None)):
+                missing.append(f"graph.{method_name}")
+
+        if not callable(getattr(getattr(graph, "episode", None), "get", None)):
+            missing.append("graph.episode.get")
+
+        if not callable(getattr(getattr(graph, "node", None), "get_by_graph_id", None)):
+            missing.append("graph.node.get_by_graph_id")
+
+        if not callable(getattr(getattr(graph, "edge", None), "get_by_graph_id", None)):
+            missing.append("graph.edge.get_by_graph_id")
+
+        if missing:
+            raise TypeError(
+                "Zep client is missing required APIs for GraphBuilderService: "
+                + ", ".join(missing)
+            )
 
     def build_graph_async(
         self,
@@ -41,20 +81,6 @@ class GraphBuilderService:
         chunk_overlap: int = 50,
         batch_size: int = 3,
     ) -> str:
-        """
-        Build the graph asynchronously (task runs on a background thread).
-
-        Args:
-            text: Input text
-            ontology: Ontology definition (output from API 1)
-            graph_name: Graph display name
-            chunk_size: Chunk size in characters
-            chunk_overlap: Overlap between chunks
-            batch_size: Number of chunks per batch
-
-        Returns:
-            Task ID
-        """
         # Create task
         task_id = self.task_manager.create_task(
             task_type="graph_build",
@@ -65,7 +91,6 @@ class GraphBuilderService:
             },
         )
 
-        # Run build on a background thread
         thread = threading.Thread(
             target=self._build_graph,
             args=(task_id, text, ontology, graph_name, project_id, chunk_size, chunk_overlap, batch_size),
@@ -86,7 +111,6 @@ class GraphBuilderService:
         chunk_overlap: int,
         batch_size: int,
     ):
-        """Worker thread for graph construction."""
         try:
             self.task_manager.update_task(
                 task_id, status=TaskStatus.PROCESSING, progress=5, message="Start building graph..."

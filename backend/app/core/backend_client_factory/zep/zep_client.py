@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 from zep_cloud.client import Zep
 from zep_cloud import EpisodeData
 
-from app.core.graphiti.client_factory import (
+from app.core.backend_client_factory.schema import (
     ZepClientAdapter,
     GraphNode,
     GraphEdge,
@@ -14,8 +14,18 @@ from app.core.graphiti.client_factory import (
 class ZepCloudClient(ZepClientAdapter):
     def __init__(self, api_key: str):
         if not api_key:
-            raise ValueError("ZEP_API_KEY 未配置")
-        self.client = Zep(api_key=api_key)
+            raise ValueError("ZEP_API_KEY is not configured")
+        self._client = Zep(api_key=api_key)
+        # Compatibility with direct Zep SDK usage:
+        # GraphBuilderService expects self.client.graph.* calls.
+        self.graph = self._client.graph
+
+    @property
+    def client(self) -> Zep:
+        return self._client
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
 
     def create_graph(self, graph_id: str, name: str, description: str) -> None:
         self.client.graph.create(

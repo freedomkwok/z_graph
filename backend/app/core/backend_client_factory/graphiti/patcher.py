@@ -22,11 +22,10 @@ def sanitize_for_graphdb(value: Any, path: str = "") -> Any:
             return str(value)
 
     if isinstance(value, (list, tuple)):
-        # 检查是否是简单数组 (只有原始类型)
         is_simple = all(isinstance(v, (str, int, float, bool, type(None))) for v in value)
         if is_simple:
             return list(value)
-        # 包含复杂类型，序列化为 JSON
+
         try:
             return json.dumps(value, ensure_ascii=False, default=str)
         except (TypeError, ValueError) as e:
@@ -54,9 +53,6 @@ def apply_patch() -> bool:
         return True
 
     try:
-        
-
-        # 保存原始函数
         original_add_nodes_and_edges_bulk_tx = bulk_utils.add_nodes_and_edges_bulk_tx
 
         @functools.wraps(original_add_nodes_and_edges_bulk_tx)
@@ -85,7 +81,6 @@ def apply_patch() -> bool:
                 if hasattr(edge, 'attributes') and edge.attributes:
                     edge.attributes = sanitize_attributes(edge.attributes)
 
-            # 调用原始函数
             return await original_add_nodes_and_edges_bulk_tx(
                 tx,
                 episodic_nodes,
@@ -100,12 +95,12 @@ def apply_patch() -> bool:
         bulk_utils.add_nodes_and_edges_bulk_tx = patched_add_nodes_and_edges_bulk_tx
 
         _patch_applied = True
-        logger.info("Graphiti bulk_utils patch 应用成功")
+        logger.info("Graphiti bulk_utils patch applied successfully")
         return True
 
     except ImportError as e:
-        logger.warning(f"无法导入 graphiti_core.utils.bulk_utils: {e}")
+        logger.warning(f"Failed to import graphiti_core.utils.bulk_utils: {e}")
         return False
     except Exception as e:
-        logger.error(f"应用 Graphiti patch 失败: {e}")
+        logger.error(f"Failed to apply Graphiti patch: {e}")
         return False
