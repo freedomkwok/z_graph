@@ -70,7 +70,7 @@ def fetch_all_nodes(
     client: Zep,
     graph_id: str,
     page_size: int = _DEFAULT_PAGE_SIZE,
-    max_items: int = _MAX_NODES,
+    max_items: int | None = _MAX_NODES,
     max_retries: int = _DEFAULT_MAX_RETRIES,
     retry_delay: float = _DEFAULT_RETRY_DELAY,
 ) -> list[Any]:
@@ -96,7 +96,7 @@ def fetch_all_nodes(
             break
 
         all_nodes.extend(batch)
-        if len(all_nodes) >= max_items:
+        if max_items is not None and len(all_nodes) >= max_items:
             all_nodes = all_nodes[:max_items]
             logger.warning(
                 f"Node count reached limit ({max_items}), stopping pagination for graph {graph_id}"

@@ -414,7 +414,7 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                 builder._wait_for_episodes(episode_uuids, wait_progress_callback)
 
                 task_manager.update_task(task_id, message="Getting Graph Data", progress=90)
-                graph_data = builder.get_graph_data(graph_id)
+                graph_data = builder.get_graph_data(graph_id, include_episode_data=False)
 
                 project.status = ProjectStatus.GRAPH_COMPLETED
                 ProjectManager.save_project(project)
@@ -493,13 +493,19 @@ def list_tasks() -> dict[str, Any]:
 
 
 @router.get("/data/{graph_id}")
-def get_graph_data(graph_id: str) -> Any:
+def get_graph_data(
+    graph_id: str,
+    include_episode_data: bool = Query(default=True),
+) -> Any:
     try:
         if not Config.ZEP_API_KEY:
             return _error_response(500, "ZEP_API_KEY not configured")
 
         builder = GraphBuilderService(backend=Config.ZEP_BACKEND ,api_key=Config.ZEP_API_KEY)
-        graph_data = builder.get_graph_data(graph_id)
+        graph_data = builder.get_graph_data(
+            graph_id,
+            include_episode_data=include_episode_data,
+        )
         return {
             "success": True,
             "data": graph_data,

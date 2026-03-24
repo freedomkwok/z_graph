@@ -382,17 +382,90 @@ class GraphBuilderService:
             entity_types=list(entity_types),
         )
 
-    def get_graph_data(self, graph_id: str) -> dict[str, Any]:
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, list | tuple):
+            return [GraphBuilderService._json_safe(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): GraphBuilderService._json_safe(item) for key, item in value.items()}
+        return str(value)
+
+    def _serialize_episode(self, episode: Any, fallback_uuid: str) -> dict[str, Any]:
+        model_data: dict[str, Any] = {}
+        if hasattr(episode, "model_dump"):
+            try:
+                model_data = episode.model_dump(mode="json", exclude_none=False)
+            except TypeError:
+                model_data = episode.model_dump()
+            except Exception:
+                model_data = {}
+        elif hasattr(episode, "dict"):
+            try:
+                model_data = episode.dict()
+            except Exception:
+                model_data = {}
+        elif hasattr(episode, "__dict__"):
+            model_data = dict(getattr(episode, "__dict__", {}) or {})
+
+        episode_uuid = getattr(episode, "uuid_", None) or getattr(episode, "uuid", None) or fallback_uuid
+        payload = {
+            "uuid": str(episode_uuid),
+            "processed": self._json_safe(getattr(episode, "processed", None)),
+            "type": self._json_safe(getattr(episode, "type", None)),
+            "data": self._json_safe(getattr(episode, "data", None)),
+            "source": self._json_safe(getattr(episode, "source", None)),
+            "source_description": self._json_safe(getattr(episode, "source_description", None)),
+            "created_at": self._json_safe(getattr(episode, "created_at", None)),
+            "reference_time": self._json_safe(getattr(episode, "reference_time", None)),
+        }
+
+        normalized_model_data = self._json_safe(model_data) if isinstance(model_data, dict) else {}
+        if isinstance(normalized_model_data, dict):
+            for key, value in normalized_model_data.items():
+                if key not in payload:
+                    payload[key] = value
+        return payload
+
+    def _collect_episode_data(self, episode_ids: set[str]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+        if not episode_ids:
+            return [], []
+
+        episode_namespace = getattr(getattr(self.client, "graph", None), "episode", None)
+        get_episode = getattr(episode_namespace, "get", None)
+        if not callable(get_episode):
+            return [], [{"error": "Episode API is unavailable for selected backend"}]
+
+        episodes_data: list[dict[str, Any]] = []
+        episode_errors: list[dict[str, str]] = []
+        for episode_id in sorted(episode_ids):
+            try:
+                episode = get_episode(uuid_=episode_id)
+                episodes_data.append(self._serialize_episode(episode, fallback_uuid=episode_id))
+            except Exception as exc:
+                episode_errors.append(
+                    {
+                        "uuid": episode_id,
+                        "error": str(exc),
+                    }
+                )
+
+        return episodes_data, episode_errors
+
+    def get_graph_data(self, graph_id: str, include_episode_data: bool = True) -> dict[str, Any]:
         """
         Return full graph payload with rich node/edge details.
 
         Args:
             graph_id: Graph ID
+            include_episode_data: If true, fetch complete episode payloads by episode UUID.
 
         Returns:
-            Dict with nodes and edges, including temporal fields and attributes.
+            Dict with nodes, edges, and optional episode payloads.
         """
-        nodes = fetch_all_nodes(self.client, graph_id)
+        # No hard cap here, this endpoint is expected to return full graph payload.
+        nodes = fetch_all_nodes(self.client, graph_id, max_items=None)
         edges = fetch_all_edges(self.client, graph_id)
 
         # UUID -> name for edge endpoints
@@ -455,12 +528,29 @@ class GraphBuilderService:
                 }
             )
 
+        episode_ids = sorted(
+            {
+                episode_id
+                for edge in edges_data
+                for episode_id in edge.get("episodes", [])
+                if episode_id
+            }
+        )
+        episodes_data: list[dict[str, Any]] = []
+        episode_errors: list[dict[str, str]] = []
+        if include_episode_data:
+            episodes_data, episode_errors = self._collect_episode_data(set(episode_ids))
+
         return {
             "graph_id": graph_id,
             "nodes": nodes_data,
             "edges": edges_data,
             "node_count": len(nodes_data),
             "edge_count": len(edges_data),
+            "episode_ids": episode_ids,
+            "episode_count": len(episode_ids),
+            "episodes": episodes_data if include_episode_data else [],
+            "episode_errors": episode_errors if include_episode_data else [],
         }
 
     def delete_graph(self, graph_id: str):
