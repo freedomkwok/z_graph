@@ -12,7 +12,7 @@ from app.core.backend_client_factory.schema import (
     EpisodeStatus,
 )
 from app.core.utils.langfuse import create_graphiti_langfuse_tracer
-
+from graphiti_core.graph.driver import GraphDriver
 logger = logging.getLogger('zep_graph.graphiti_client')
 
 _async_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -117,12 +117,14 @@ class GraphitiClient(ZepClientAdapter):
         graphdb_password: str,
         llm_client: Optional[Any] = None,
         embedder: Optional[Any] = None,
+        graph_driver: GraphDriver | None = None,
     ):
         self.graphdb_uri = graphdb_uri
         self.graphdb_user = graphdb_user
         self.graphdb_password = graphdb_password
         self._llm_client = llm_client
         self._embedder = embedder
+        self.graph_driver = graph_driver
 
         self._graphiti = None
         self._driver = None
@@ -149,13 +151,20 @@ class GraphitiClient(ZepClientAdapter):
             if embedder is None:
                 embedder = self._build_default_embedder()
 
-            self._graphiti = Graphiti(
-                self.graphdb_uri,
-                self.graphdb_user,
-                self.graphdb_password,
-                llm_client=llm_client,
-                embedder=embedder,
-            )
+            if self.graph_driver is not None:
+                self._graphiti = Graphiti(
+                    llm_client=llm_client,
+                    embedder=embedder,
+                    graph_driver=self.graph_driver,
+                )
+            else:
+                self._graphiti = Graphiti(
+                    self.graphdb_uri,
+                    self.graphdb_user,
+                    self.graphdb_password,
+                    llm_client=llm_client,
+                    embedder=embedder,
+                )
 
             _run_async(self._graphiti.build_indices_and_constraints())
 

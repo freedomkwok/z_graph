@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     graphdb_uri: str | None = None
     graphdb_user: str | None = None
     graphdb_password: str | None = None
+    graphdb_dsn: str | None = None
 
     @property
     def database_url(self) -> str:
@@ -124,3 +125,4 @@ class Config:
     GRAPHDB_URI = settings.graphdb_uri
     GRAPHDB_USER = settings.graphdb_user
     GRAPHDB_PASSWORD = settings.graphdb_password
+    GRAPHDB_DSN = settings.graphdb_dsn

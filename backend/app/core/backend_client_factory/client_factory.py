@@ -5,7 +5,6 @@ from app.core.config import Config
 from app.core.backend_client_factory.schema import ZepClientAdapter
 from app.core.backend_client_factory.zep.zep_client import ZepCloudClient
 from app.core.backend_client_factory.graphiti.graphiti_client import GraphitiClient
-
 logger = logging.getLogger('zep_graph.zep_factory')
 
 
@@ -42,24 +41,32 @@ def _create_graphiti_client(
     graphdb_uri: Optional[str] = None,
     graphdb_user: Optional[str] = None,
     graphdb_password: Optional[str] = None,
+    dsn: Optional[str] = None,
 ) -> ZepClientAdapter:
     """Graphiti Local Client"""
     
     uri = graphdb_uri or Config.GRAPHDB_URI
     user = graphdb_user or Config.GRAPHDB_USER
     password = graphdb_password or Config.GRAPHDB_PASSWORD
+    dsn = dsn or Config.GRAPHDB_DSN
 
-    if not all([uri, user, password]):
+    if not all([uri, user, password]) or not ([dsn, user, password]):
         raise ValueError(
             "GraphDB configuration is incomplete. Using Graphiti requires setting GRAPHDB_URI, GRAPHDB_USER, GRAPHDB_PASSWORD."
         )
 
     logger.info(f"Create Graphiti Local Client: {uri}")
-    return GraphitiClient(
-        graphdb_uri=uri,
-        graphdb_user=user,
-        graphdb_password=password,
-    )
+    if dsn:
+        from graphiti_core.graph.driver import OracleDriver
+        return GraphitiClient(
+            graph_driver=OracleDriver(dsn=dsn, user=user, password=password)
+        )
+    else:
+        return GraphitiClient(
+            graphdb_uri=uri,
+            graphdb_user=user,
+            graphdb_password=password,
+        )
 
 import threading
 
