@@ -12,7 +12,7 @@ from app.core.backend_client_factory.schema import (
     EpisodeStatus,
 )
 from app.core.utils.langfuse import create_graphiti_langfuse_tracer
-from graphiti_core.graph.driver import GraphDriver
+from graphiti_core.driver import GraphDriver
 logger = logging.getLogger('zep_graph.graphiti_client')
 
 _async_loop: Optional[asyncio.AbstractEventLoop] = None
