@@ -76,7 +76,7 @@ def apply_patch() -> bool:
                 if hasattr(node, 'attributes') and node.attributes:
                     node.attributes = sanitize_attributes(node.attributes)
                 if hasattr(node, 'name_embedding') and node.name_embedding:
-                    node.name_embedding = "" #name_embedding
+                    node.name_embedding = None #name_embedding
 
             # Sanitize entity_edges attributes
             for edge in entity_edges:

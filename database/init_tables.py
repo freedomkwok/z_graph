@@ -16,6 +16,7 @@ FALLBACK_ENV_FILE = DATABASE_DIR / ".env.example"
 LEGACY_ENV_FILE = BACKEND_DIR / ".env"
 LEGACY_FALLBACK_ENV_FILE = BACKEND_DIR / ".env.example"
 SCHEMA_SQL_PATH = REPO_ROOT / "database" / "init_tables.sql"
+SEED_SQL_PATH = REPO_ROOT / "database" / "init_seed_data.sql"
 
 
 def _load_env() -> None:
@@ -83,14 +84,20 @@ def _get_bootstrap_connection_string(target_settings: dict[str, str]) -> str:
     )
 
 
-def _load_schema_statements() -> list[str]:
-    if not SCHEMA_SQL_PATH.exists():
-        raise FileNotFoundError(f"Schema file not found: {SCHEMA_SQL_PATH}")
+def _load_sql_statements(path: Path, *, required: bool, split_statements: bool = True) -> list[str]:
+    if not path.exists():
+        if required:
+            raise FileNotFoundError(f"SQL file not found: {path}")
+        return []
 
-    schema_sql = SCHEMA_SQL_PATH.read_text(encoding="utf-8")
-    statements = [stmt.strip() for stmt in schema_sql.split(";") if stmt.strip()]
-    if not statements:
-        raise ValueError(f"No SQL statements found in schema: {SCHEMA_SQL_PATH}")
+    sql_text = path.read_text(encoding="utf-8")
+    if split_statements:
+        statements = [stmt.strip() for stmt in sql_text.split(";") if stmt.strip()]
+    else:
+        statement = sql_text.strip()
+        statements = [statement] if statement else []
+    if required and not statements:
+        raise ValueError(f"No SQL statements found in required file: {path}")
     return statements
 
 
@@ -184,7 +191,14 @@ def init_tables() -> None:
     _load_env()
     target_settings = _get_target_postgres_settings()
     connection_string = _get_connection_string()
-    statements = _load_schema_statements()
+    schema_statements = _load_sql_statements(SCHEMA_SQL_PATH, required=True, split_statements=True)
+    apply_seed = _is_truthy(os.getenv("DB_INIT_APPLY_SEED"), default=True)
+    seed_statements = (
+        _load_sql_statements(SEED_SQL_PATH, required=False, split_statements=False)
+        if apply_seed
+        else []
+    )
+    statements = [*schema_statements, *seed_statements]
 
     auto_provision = _is_truthy(os.getenv("DB_INIT_AUTO_PROVISION"), default=True)
     if not _can_connect(connection_string):
@@ -199,7 +213,10 @@ def init_tables() -> None:
                 cur.execute(statement)
         conn.commit()
 
-    print("Database schema initialized successfully.")
+    if seed_statements:
+        print("Database schema initialized successfully (seed data applied).")
+    else:
+        print("Database schema initialized successfully.")
 
 
 if __name__ == "__main__":
