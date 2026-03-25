@@ -1,1 +1,1 @@
-- Organization: 任何组织机构
+- Organization: any organization or institution

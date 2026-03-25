@@ -1,1 +1,1 @@
-- Person: 任何自然人
+- Person: any individual human

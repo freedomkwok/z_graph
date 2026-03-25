@@ -1,7 +1,7 @@
-- University: 高校
-- Company: 公司企业
-- GovernmentAgency: 政府机构
-- MediaOutlet: 媒体机构
-- Hospital: 医院
-- School: 中小学
-- NGO: 非政府组织
+- University: university
+- Company: company/business
+- GovernmentAgency: government agency
+- MediaOutlet: media outlet
+- Hospital: hospital
+- School: primary/secondary school
+- NGO: non-governmental organization

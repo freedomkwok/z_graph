@@ -1,9 +1,9 @@
-背景上下文：
+Background context:
 {{context_hint}}
 
-报告上下文：{{report_context}}
+Report context: {{report_context}}
 
-请将以下问题分解为{{max_queries}}个子问题：
+Please break down the following question into {{max_queries}} sub-questions:
 {{query}}
 
-返回JSON格式的子问题列表。
+Return the sub-question list in JSON format.
