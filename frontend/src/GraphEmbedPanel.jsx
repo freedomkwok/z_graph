@@ -47,6 +47,32 @@ function getGraphId(project) {
   return String(project?.zep_graph_id ?? project?.graph_id ?? "").trim();
 }
 
+function getProjectWorkspaceId(project) {
+  return String(project?.project_workspace_id ?? project?.workspace_id ?? "").trim();
+}
+
+function resolveProjectWorkspaceId(project, projectCatalogItems, selectedProjectId) {
+  const fromCurrentProject = getProjectWorkspaceId(project);
+  if (fromCurrentProject) return fromCurrentProject;
+
+  const normalizedSelectedProjectId = String(selectedProjectId ?? "").trim();
+  if (!normalizedSelectedProjectId || !Array.isArray(projectCatalogItems)) return "";
+
+  const selectedProject = projectCatalogItems.find(
+    (item) => String(item?.project_id ?? "").trim() === normalizedSelectedProjectId,
+  );
+  return getProjectWorkspaceId(selectedProject);
+}
+
+function buildGraphDataApiPath(graphId, projectWorkspaceId) {
+  const params = new URLSearchParams({ include_episode_data: "false" });
+  const normalizedWorkspaceId = String(projectWorkspaceId ?? "").trim();
+  if (normalizedWorkspaceId) {
+    params.set("project_workspace_id", normalizedWorkspaceId);
+  }
+  return `/api/data/${encodeURIComponent(String(graphId ?? "").trim())}?${params.toString()}`;
+}
+
 function getEntityType(node) {
   const labels = Array.isArray(node?.labels) ? node.labels : [];
   const custom = labels.find((label) => label !== "Entity" && label !== "Node");
@@ -114,6 +140,11 @@ export default function GraphEmbedPanel() {
   const { state, refreshGraphFrame, setViewMode, addSystemLog } = useTaskStore();
   const isGraphOnly = state.viewMode === "graph";
   const graphId = getGraphId(state.currentProject);
+  const projectWorkspaceId = resolveProjectWorkspaceId(
+    state.currentProject,
+    state.projectCatalog?.items,
+    state.form?.projectId,
+  );
   const graphUrl = resolveGraphEmbedUrl(state.currentProject);
 
   const containerRef = useRef(null);
@@ -276,7 +307,7 @@ export default function GraphEmbedPanel() {
 
       try {
         const response = await fetch(
-          withApiBase(`/api/data/${encodeURIComponent(graphId)}?include_episode_data=false`),
+          withApiBase(buildGraphDataApiPath(graphId, projectWorkspaceId)),
           {
           cache: "no-store",
           headers: { Accept: "application/json" },
@@ -305,7 +336,7 @@ export default function GraphEmbedPanel() {
         if (!silent) setLoading(false);
       }
     },
-    [graphId],
+    [graphId, projectWorkspaceId],
   );
 
   useEffect(() => {

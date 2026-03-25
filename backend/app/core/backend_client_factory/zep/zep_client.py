@@ -120,7 +120,7 @@ class ZepCloudClient(ZepClientAdapter):
         except Exception:
             return []
 
-    # ==================== Edge 操作 ====================
+    # ==================== Edge operations ====================
 
     def get_all_edges(self, graph_id: str) -> List[GraphEdge]:
         all_edges: List[GraphEdge] = []
@@ -145,7 +145,7 @@ class ZepCloudClient(ZepClientAdapter):
 
         return all_edges
 
-    # ==================== Search 操作 ====================
+    # ==================== Search operations ====================
 
     def search(
         self,
@@ -166,11 +166,11 @@ class ZepCloudClient(ZepClientAdapter):
         nodes = []
         edges = []
 
-        # 处理 nodes
+        # Handle nodes
         if hasattr(search_result, 'nodes') and search_result.nodes:
             nodes = [self._convert_node(n) for n in search_result.nodes]
 
-        # 处理 edges
+        # Handle edges
         if hasattr(search_result, 'edges') and search_result.edges:
             edges = [self._convert_edge(e) for e in search_result.edges]
 
@@ -188,13 +188,11 @@ class ZepCloudClient(ZepClientAdapter):
         )
 
     def _convert_edge(self, edge: Any) -> GraphEdge:
-        # 处理时间字段
         created_at = getattr(edge, 'created_at', None)
         valid_at = getattr(edge, 'valid_at', None)
         invalid_at = getattr(edge, 'invalid_at', None)
         expired_at = getattr(edge, 'expired_at', None)
 
-        # 处理 episodes
         episodes = getattr(edge, 'episodes', None) or getattr(edge, 'episode_ids', None)
         if episodes and not isinstance(episodes, list):
             episodes = [str(episodes)]

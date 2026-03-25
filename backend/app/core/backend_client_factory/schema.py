@@ -58,7 +58,7 @@ class ZepClientAdapter(ABC):
     ) -> None:
         ...
 
-    # ==================== Episode 操作 ====================
+    # ==================== Episode operations ====================
 
     @abstractmethod
     def add_episode(self, graph_id: str, data: str, episode_type: str = "text") -> str:
@@ -85,7 +85,7 @@ class ZepClientAdapter(ABC):
             time.sleep(3)
         return False
 
-    # ==================== Node 操作 ====================
+    # ==================== Node operations ====================
 
     @abstractmethod
     def get_all_nodes(self, graph_id: str) -> List[GraphNode]:
@@ -99,13 +99,13 @@ class ZepClientAdapter(ABC):
     def get_node_edges(self, node_uuid: str) -> List[GraphEdge]:
         ...
 
-    # ==================== Edge 操作 ====================
+    # ==================== Edge operations ====================
 
     @abstractmethod
     def get_all_edges(self, graph_id: str) -> List[GraphEdge]:
         ...
 
-    # ==================== Search 操作 ====================
+    # ==================== Search operations ====================
 
     @abstractmethod
     def search(

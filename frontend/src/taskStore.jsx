@@ -146,6 +146,15 @@ async function parseJsonResponse(response, endpointLabel) {
   }
 }
 
+function buildGraphDataApiPath(graphId, projectWorkspaceId) {
+  const params = new URLSearchParams({ include_episode_data: "false" });
+  const normalizedWorkspaceId = String(projectWorkspaceId ?? "").trim();
+  if (normalizedWorkspaceId) {
+    params.set("project_workspace_id", normalizedWorkspaceId);
+  }
+  return `/api/data/${encodeURIComponent(String(graphId ?? "").trim())}?${params.toString()}`;
+}
+
 function getOntologyTaskFromProject(project) {
   const entityTypes = project?.ontology?.entity_types?.length ?? 0;
   const edgeTypes = project?.ontology?.edge_types?.length ?? 0;
@@ -401,7 +410,7 @@ export function TaskStoreProvider({ children }) {
     return true;
   };
 
-  async function switchProject(projectId) {
+  async function switchProject(projectId, preferredWorkspaceId = "") {
     const selectedProjectId = (projectId ?? "").trim();
     setFormField("projectId", selectedProjectId);
     rememberLastProjectId(selectedProjectId);
@@ -430,30 +439,38 @@ export function TaskStoreProvider({ children }) {
       }
 
       const project = payload.data;
-      dispatch({ type: "SET_CURRENT_PROJECT", payload: project });
+      const resolvedWorkspaceId =
+        project?.project_workspace_id ?? project?.workspace_id ?? preferredWorkspaceId;
+      const hydratedProject = resolvedWorkspaceId
+        ? { ...project, project_workspace_id: resolvedWorkspaceId }
+        : project;
+      dispatch({ type: "SET_CURRENT_PROJECT", payload: hydratedProject });
       setFormFields({
-        projectId: project.project_id ?? selectedProjectId,
-        projectName: project.name ?? "IMP Graph Project",
-        simulationRequirement: project.context_requirement ?? "",
+        projectId: hydratedProject.project_id ?? selectedProjectId,
+        projectName: hydratedProject.name ?? "IMP Graph Project",
+        simulationRequirement: hydratedProject.context_requirement ?? "",
         graphName: "",
-        chunkSize: normalizePositiveInteger(project.chunk_size, 500),
-        chunkOverlap: normalizeNonNegativeInteger(project.chunk_overlap, 50),
+        chunkSize: normalizePositiveInteger(hydratedProject.chunk_size, 500),
+        chunkOverlap: normalizeNonNegativeInteger(hydratedProject.chunk_overlap, 50),
         promptLabel: getPreferredPromptLabel(
           state.promptLabelCatalog.items,
-          project.prompt_label ?? state.form.promptLabel,
+          hydratedProject.prompt_label ?? state.form.promptLabel,
         ),
       });
 
       dispatch({
         type: "SET_ONTOLOGY_TASK",
-        payload: getOntologyTaskFromProject(project),
+        payload: getOntologyTaskFromProject(hydratedProject),
       });
 
-      let nextGraphTask = getGraphTaskFromProject(project);
-      const projectGraphId = project?.zep_graph_id ?? project?.graph_id ?? "";
-      if (project?.status === "graph_completed" && projectGraphId) {
+      let nextGraphTask = getGraphTaskFromProject(hydratedProject);
+      const projectGraphId = hydratedProject?.zep_graph_id ?? hydratedProject?.graph_id ?? "";
+      const projectWorkspaceId = hydratedProject?.project_workspace_id ?? hydratedProject?.workspace_id;
+      if (hydratedProject?.status === "graph_completed" && projectGraphId) {
         try {
-          const graphResponse = await fetch(withApiBase(`/api/data/${projectGraphId}`));
+          const graphResponse = await fetch(
+            withApiBase(buildGraphDataApiPath(projectGraphId, projectWorkspaceId)),
+          );
           const graphPayload = await graphResponse.json();
           if (graphResponse.ok && graphPayload?.success && graphPayload?.data) {
             const graphData = graphPayload.data;
@@ -474,7 +491,7 @@ export function TaskStoreProvider({ children }) {
       });
       lastPolledTaskMessageRef.current = "";
       addSystemLog(
-        `Project loaded: ${project.project_id} (${project.status ?? "unknown status"})`,
+        `Project loaded: ${hydratedProject.project_id} (${hydratedProject.status ?? "unknown status"})`,
       );
     } catch (error) {
       addSystemLog(`Exception in LoadProject: ${String(error)}`);
@@ -936,6 +953,7 @@ export function TaskStoreProvider({ children }) {
               payload: {
                 graph_id: completedGraphId,
                 zep_graph_id: completedGraphId,
+                project_workspace_id: task.result?.project_workspace_id ?? "",
                 zep_graph_address: task.result?.zep_graph_address ?? "",
                 status: "graph_completed",
               },

@@ -68,13 +68,15 @@ def apply_patch() -> bool:
             """
             Patched version: sanitize node/edge attributes before Neo4j write
 
-            签名与 graphiti-core 0.25.0 的 add_nodes_and_edges_bulk_tx 保持一致:
+            signature with graphiti-core 0.25.0's add_nodes_and_edges_bulk_tx:
             (tx, episodic_nodes, episodic_edges, entity_nodes, entity_edges, embedder, driver)
             """
             # Sanitize entity_nodes attributes
             for node in entity_nodes:
                 if hasattr(node, 'attributes') and node.attributes:
                     node.attributes = sanitize_attributes(node.attributes)
+                if hasattr(node, 'name_embedding') and node.name_embedding:
+                    node.name_embedding = "" #name_embedding
 
             # Sanitize entity_edges attributes
             for edge in entity_edges:
@@ -91,7 +93,7 @@ def apply_patch() -> bool:
                 driver,
             )
 
-        # 应用 patch
+        #patch
         bulk_utils.add_nodes_and_edges_bulk_tx = patched_add_nodes_and_edges_bulk_tx
 
         _patch_applied = True

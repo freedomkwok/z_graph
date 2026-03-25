@@ -129,7 +129,13 @@ export default function TopBar({ currentPage = "workspace", onNavigate }) {
           <select
             className="project-select"
             value={form.projectId}
-            onChange={(event) => switchProject(event.target.value)}
+            onChange={(event) => {
+              const selectedProjectId = event.target.value;
+              const selectedProject = projectCatalog.items.find(
+                (project) => project.project_id === selectedProjectId,
+              );
+              switchProject(selectedProjectId, selectedProject?.project_workspace_id ?? "");
+            }}
             disabled={projectCatalog.loading || !projectCatalog.items.length}
             title="Switch project"
           >

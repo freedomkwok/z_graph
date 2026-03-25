@@ -182,15 +182,15 @@ class ProjectManager:
         files_dir = cls._get_project_files_dir(project_id)
         os.makedirs(files_dir, exist_ok=True)
 
-        # 生成安全的文件名
+        # Generate a safe filename
         ext = os.path.splitext(original_filename)[1].lower()
         safe_filename = f"{uuid.uuid4().hex[:8]}{ext}"
         file_path = os.path.join(files_dir, safe_filename)
 
-        # 保存文件
+        # Save file
         file_storage.save(file_path)
 
-        # 获取文件大小
+        # Get file size
         file_size = os.path.getsize(file_path)
 
         return {

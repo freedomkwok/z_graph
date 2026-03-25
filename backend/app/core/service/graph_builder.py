@@ -474,7 +474,12 @@ class GraphBuilderService:
 
         return episodes_data, episode_errors
 
-    def get_graph_data(self, graph_id: str, include_episode_data: bool = True) -> dict[str, Any]:
+    def get_graph_data(
+        self,
+        graph_id: str,
+        include_episode_data: bool = True,
+        project_workspace_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         Return full graph payload with rich node/edge details.
 
@@ -568,6 +573,7 @@ class GraphBuilderService:
 
         return {
             "graph_id": graph_id,
+            "project_workspace_id": project_workspace_id,
             "nodes": nodes_data,
             "edges": edges_data,
             "node_count": len(nodes_data),

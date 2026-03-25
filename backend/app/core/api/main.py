@@ -517,9 +517,11 @@ def list_tasks() -> dict[str, Any]:
 def get_graph_data(
     graph_id: str,
     include_episode_data: bool = Query(default=True),
+    project_workspace_id: str | None = Query(default=None),
 ) -> Any:
     try:
-        builder = GraphBuilderService(backend=Config.ZEP_BACKEND ,api_key=Config.ZEP_API_KEY)
+        backend = "zep_cloud" if project_workspace_id else Config.ZEP_BACKEND
+        builder = GraphBuilderService(backend=backend, api_key=Config.ZEP_API_KEY)
         graph_data = builder.get_graph_data(
             graph_id,
             include_episode_data=include_episode_data,
