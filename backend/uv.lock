@@ -339,6 +339,7 @@ source = { editable = "." }
 dependencies = [
     { name = "debugpy" },
     { name = "fastapi" },
+    { name = "graphiti-core" },
     { name = "httpx" },
     { name = "langfuse" },
     { name = "openai" },
@@ -373,6 +374,7 @@ dev = [
 requires-dist = [
     { name = "debugpy" },
     { name = "fastapi" },
+    { name = "graphiti-core", specifier = ">=0.25.5" },
     { name = "graphiti-core", marker = "extra == 'graphiti'", specifier = ">=0.25.0,<0.26.0" },
     { name = "httpx" },
     { name = "langfuse" },

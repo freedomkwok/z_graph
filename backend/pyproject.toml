@@ -18,6 +18,7 @@ dependencies = [
     "tenacity",
     "psycopg[binary]>=3.3.3",
     "pymupdf>=1.27.2.2",
+    "graphiti-core>=0.25.5",
 ]
 
 [project.optional-dependencies]

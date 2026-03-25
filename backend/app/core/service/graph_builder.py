@@ -228,7 +228,7 @@ class GraphBuilderService:
             for attr_def in entity_def.get("attributes", []):
                 attr_name = safe_attr_name(attr_def["name"])  # safe name
                 attr_desc = attr_def.get("description", attr_name)
-                # Zep API requires Field(description=...)
+
                 attrs[attr_name] = Field(description=attr_desc, default=None)
                 annotations[attr_name] = Optional[EntityText]  # type hint
 
@@ -249,7 +249,7 @@ class GraphBuilderService:
             for attr_def in edge_def.get("attributes", []):
                 attr_name = safe_attr_name(attr_def["name"])  # safe name
                 attr_desc = attr_def.get("description", attr_name)
-                # Zep API requires Field(description=...)
+
                 attrs[attr_name] = Field(description=attr_desc, default=None)
                 annotations[attr_name] = Optional[str]  # edge attrs use str
 
@@ -366,7 +366,7 @@ class GraphBuilderService:
             elapsed = int(time.time() - start_time)
             if progress_callback:
                 progress_callback(
-                    f"Zep processing {completed_count}/{total_episodes} completed, {len(pending_episodes)} pending ({elapsed} seconds)",
+                    f"Task processing {completed_count}/{total_episodes} completed, {len(pending_episodes)} pending ({elapsed} seconds)",
                     completed_count / total_episodes if total_episodes > 0 else 0,
                 )
 
