@@ -50,9 +50,13 @@ def _create_graphiti_client(
     password = graphdb_password or Config.GRAPHDB_PASSWORD
     dsn = dsn or Config.GRAPHDB_DSN
 
-    if not all([uri, user, password]) or not ([dsn, user, password]):
+    has_uri_config = all([uri, user, password])
+    has_dsn_config = all([dsn, user, password])
+    if not (has_uri_config or has_dsn_config):
         raise ValueError(
-            "GraphDB configuration is incomplete. Using Graphiti requires setting GRAPHDB_URI, GRAPHDB_USER, GRAPHDB_PASSWORD."
+            "GraphDB configuration is incomplete. Using Graphiti requires either "
+            "(GRAPHDB_URI, GRAPHDB_USER, GRAPHDB_PASSWORD) or "
+            "(GRAPHDB_DSN, GRAPHDB_USER, GRAPHDB_PASSWORD)."
         )
 
     logger.info(f"Create Graphiti Local Client: {uri}")
