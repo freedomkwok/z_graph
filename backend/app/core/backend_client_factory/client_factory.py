@@ -28,7 +28,6 @@ def create_zep_client(
 
 
 def _create_cloud_client(api_key: Optional[str] = None) -> ZepClientAdapter:
-    
     key = api_key or Config.ZEP_API_KEY
     if not key:
         raise ValueError(

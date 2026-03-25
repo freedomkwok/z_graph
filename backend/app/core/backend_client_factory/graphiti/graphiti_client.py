@@ -28,23 +28,31 @@ def _start_async_loop():
 
 def _ensure_async_loop():
     global _async_thread
-    if _async_thread is None or not _async_thread.is_alive():
-        with _init_lock:
-            if _async_thread is None or not _async_thread.is_alive():
-                _async_thread = threading.Thread(
-                    target=_start_async_loop,
-                    daemon=True,
-                    name="graphiti-async-loop"
-                )
-                _async_thread.start()
-                while _async_loop is None:
-                    import time
-                    time.sleep(0.01)
+    with _init_lock:
+        if _async_thread is None or not _async_thread.is_alive():
+            _async_thread = threading.Thread(
+                target=_start_async_loop,
+                daemon=True,
+                name="graphiti-async-loop"
+            )
+            _async_thread.start()
+
+    # Wait for loop to become available and running.
+    import time
+    timeout_seconds = 5.0
+    deadline = time.time() + timeout_seconds
+    while True:
+        loop = _async_loop
+        if loop is not None and not loop.is_closed() and loop.is_running():
+            return loop
+        if time.time() >= deadline:
+            raise RuntimeError("Graphiti async loop failed to initialize")
+        time.sleep(0.01)
 
 
 def _run_async(coro):
-    _ensure_async_loop()
-    future = asyncio.run_coroutine_threadsafe(coro, _async_loop)
+    loop = _ensure_async_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
     return future.result(timeout=300)  # Timeout is 5 minutes
 
 class EmbedderClientWrapper:

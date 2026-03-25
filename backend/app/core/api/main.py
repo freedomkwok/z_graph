@@ -519,9 +519,6 @@ def get_graph_data(
     include_episode_data: bool = Query(default=True),
 ) -> Any:
     try:
-        if not Config.ZEP_API_KEY:
-            return _error_response(500, "ZEP_API_KEY not configured")
-
         builder = GraphBuilderService(backend=Config.ZEP_BACKEND ,api_key=Config.ZEP_API_KEY)
         graph_data = builder.get_graph_data(
             graph_id,

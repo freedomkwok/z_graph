@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, Optional
 
-from zep_cloud import EntityEdgeSourceTarget, EpisodeData
+from zep_cloud import EntityEdgeSourceTarget
 
 from app.core.config import Config
 from app.core.backend_client_factory.client_factory import create_zep_client
@@ -186,21 +186,29 @@ class GraphBuilderService:
         normalized_project_id = str(project_id or "").strip()
 
         if normalized_graph_id:
-            # Existing graph: keep ID and append newly extracted entities/edges on subsequent add_batch calls.
-            updated_graph = self.client.graph.update(
-                graph_id=normalized_graph_id,
+            # Existing graph: do not recreate. Keep ID and append on add_episode_batch.
+            return normalized_graph_id, None
+
+        new_graph_id = normalized_project_id or f"imp_{uuid.uuid4().hex[:16]}"
+        try:
+            created_graph = self.client.create_graph(
+                graph_id=new_graph_id,
                 name=name,
                 description="Zep Graph",
             )
-            return normalized_graph_id, self._extract_project_workspace_id(updated_graph)
-
-        new_graph_id = normalized_project_id or f"imp_{uuid.uuid4().hex[:16]}"
-        created_graph = self.client.graph.create(
-            graph_id=new_graph_id,
-            name=name,
-            description="Zep Graph",
-        )
-        return new_graph_id, self._extract_project_workspace_id(created_graph)
+            return new_graph_id, self._extract_project_workspace_id(created_graph)
+        except Exception as error:
+            status_code = getattr(error, "status_code", None)
+            error_text = str(error).lower()
+            already_exists = (
+                status_code == 409
+                or "already exists" in error_text
+                or "already_exist" in error_text
+                or "conflict" in error_text
+            )
+            if already_exists:
+                return new_graph_id, None
+            raise
 
     def set_ontology(self, graph_id: str, ontology: dict[str, Any]):
         """Apply ontology to the graph (public API)."""
@@ -273,7 +281,7 @@ class GraphBuilderService:
 
         # Call Zep to set ontology
         if entity_types or edge_definitions:
-            self.client.graph.set_ontology(
+            self.client.set_ontology(
                 graph_ids=[graph_id],
                 entities=entity_types if entity_types else None,
                 edges=edge_definitions if edge_definitions else None,
@@ -301,17 +309,12 @@ class GraphBuilderService:
                     f"sending {batch_num}/{total_batches} with ({len(batch_chunks)})", progress
                 )
 
-            episodes = [EpisodeData(data=chunk, type="text") for chunk in batch_chunks]
+            episodes = [{"data": chunk, "type": "text"} for chunk in batch_chunks]
 
             try:
-                batch_result = self.client.graph.add_batch(graph_id=graph_id, episodes=episodes)
-
-                # Collect returned episode UUIDs
+                batch_result = self.client.add_episode_batch(graph_id=graph_id, episodes=episodes)
                 if batch_result and isinstance(batch_result, list):
-                    for ep in batch_result:
-                        ep_uuid = getattr(ep, "uuid_", None) or getattr(ep, "uuid", None)
-                        if ep_uuid:
-                            episode_uuids.append(ep_uuid)
+                    episode_uuids.extend([str(ep_uuid) for ep_uuid in batch_result if ep_uuid])
 
                 time.sleep(1)
 
@@ -353,8 +356,8 @@ class GraphBuilderService:
             # Poll each episode
             for ep_uuid in list(pending_episodes):
                 try:
-                    episode = self.client.graph.episode.get(uuid_=ep_uuid)
-                    is_processed = getattr(episode, "processed", False)
+                    status = self.client.get_episode_status(ep_uuid)
+                    is_processed = bool(getattr(status, "processed", False))
 
                     if is_processed:
                         pending_episodes.remove(ep_uuid)
@@ -577,4 +580,4 @@ class GraphBuilderService:
 
     def delete_graph(self, graph_id: str):
         """Delete a graph."""
-        self.client.graph.delete(graph_id=graph_id)
+        self.client.delete_graph(graph_id=graph_id)

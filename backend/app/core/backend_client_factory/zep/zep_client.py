@@ -17,15 +17,10 @@ class ZepCloudClient(ZepClientAdapter):
     def __init__(self, api_key: str):
         if not api_key:
             raise ValueError("ZEP_API_KEY is not configured")
-        self._client = Zep(api_key=api_key)
-        self.graph = self._client.graph
-
-    @property
-    def client(self) -> Zep:
-        return self._client
+        self.client = Zep(api_key=api_key)
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._client, name)
+        return getattr(self.client, name)
 
     def create_graph(self, graph_id: str, name: str, description: str) -> None:
         self.client.graph.create(
