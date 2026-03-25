@@ -527,7 +527,7 @@ class GraphitiClient(ZepClientAdapter):
 
         base_url = os.environ.get('OPENAI_BASE_URL', '')
 
-        if not base_url or 'api.openai.com' in base_url:
+        if not base_url or 'api.openai.com' in base_url or 'openai' in base_url:
             return False
 
         non_standard_indicators = [
