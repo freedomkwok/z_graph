@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     graphdb_user: str | None = None
     graphdb_password: str | None = None
     graphdb_dsn: str | None = None
+    openai_api_key: str | None = None
+    openai_base_url: str | None = None
 
     @property
     def database_url(self) -> str:
@@ -126,3 +128,6 @@ class Config:
     GRAPHDB_USER = settings.graphdb_user
     GRAPHDB_PASSWORD = settings.graphdb_password
     GRAPHDB_DSN = settings.graphdb_dsn
+
+    OPENAI_API_KEY = settings.openai_api_key
+    OPENAI_BASE_URL = settings.openai_base_url
