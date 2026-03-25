@@ -1023,16 +1023,16 @@ export default function GraphEmbedPanel() {
           >
             ↗
           </button>
-          <button
-            className="icon-btn"
-            type="button"
-            onClick={refreshGraphFrame}
+        <button
+          className="icon-btn"
+          type="button"
+          onClick={refreshGraphFrame}
             title="Refresh graph data"
             disabled={loading}
-          >
-            ↻
-          </button>
-        </div>
+        >
+          ↻
+        </button>
+      </div>
       </div>
 
       <div className="graph-canvas-wrap" ref={containerRef}>

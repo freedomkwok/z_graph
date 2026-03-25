@@ -11,6 +11,7 @@ from app.core.backend_client_factory.schema import (
     SearchResult,
     EpisodeStatus,
 )
+from app.core.utils.langfuse import create_graphiti_langfuse_tracer
 
 logger = logging.getLogger('zep_graph.graphiti_client')
 
@@ -173,7 +174,7 @@ class GraphitiClient(ZepClientAdapter):
 
     def _build_default_llm_client(self) -> Any:
         from graphiti_core.llm_client.config import LLMConfig
-        from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+        from app.core.llm.providers.openai.provider import GraphitiOpenAIGenericClient
 
         api_key = os.environ.get('OPENAI_API_KEY')
         base_url = os.environ.get('OPENAI_BASE_URL')
@@ -191,7 +192,15 @@ class GraphitiClient(ZepClientAdapter):
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return OpenAIGenericClient(config=config)
+        llm_client = GraphitiOpenAIGenericClient(config=config, max_tokens=max_tokens)
+        tracer = create_graphiti_langfuse_tracer()
+        if tracer is not None and hasattr(llm_client, "set_tracer"):
+            try:
+                llm_client.set_tracer(tracer)
+                logger.info("Langfuse tracer has been attached to Graphiti LLM client")
+            except Exception as exc:
+                logger.warning("Failed to attach Langfuse tracer to Graphiti LLM client: %s", exc)
+        return llm_client
 
     def _build_default_embedder(self) -> Any:
         from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig

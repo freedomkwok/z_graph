@@ -39,6 +39,30 @@ def get_langfuse_client() -> Langfuse | None:
 def session_context(session_id: str | None):
     return propagate_attributes(session_id=session_id) if session_id is not None else nullcontext()
 
+
+def create_graphiti_langfuse_tracer() -> Any | None:
+    client = get_langfuse_client()
+    if client is None:
+        return None
+
+    otel_tracer = getattr(client, "_otel_tracer", None)
+    if otel_tracer is None:
+        logger.debug("Langfuse client has no OTel tracer; Graphiti tracing disabled")
+        return None
+
+    try:
+        from graphiti_core.tracer import create_tracer
+    except ImportError:
+        logger.debug("graphiti_core.tracer is unavailable; Graphiti tracing disabled")
+        return None
+
+    try:
+        return create_tracer(otel_tracer=otel_tracer, span_prefix="graphiti.llm")
+    except Exception:
+        logger.debug("Failed to create Graphiti OpenTelemetry tracer from Langfuse", exc_info=True)
+        return None
+
+
 async def run_with_langfuse_trace(
     *,
     langfuse_type: str,

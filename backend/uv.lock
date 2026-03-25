@@ -186,15 +186,6 @@ wheels = [
 ]
 
 [[package]]
-name = "diskcache"
-version = "5.6.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3f/21/1c1ffc1a039ddcc459db43cc108658f32c57d271d7289a2794e401d0fdb6/diskcache-5.6.3.tar.gz", hash = "sha256:2c3a3fa2743d8535d832ec61c2054a1641f41775aa7c556758a109941e33e4fc", size = 67916 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/27/4570e78fc0bf5ea0ca45eb1de3818a23787af9b390c0b0a0033a1b8236f9/diskcache-5.6.3-py3-none-any.whl", hash = "sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19", size = 45550 },
-]
-
-[[package]]
 name = "distro"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -233,10 +224,9 @@ wheels = [
 
 [[package]]
 name = "graphiti-core"
-version = "0.25.5"
+version = "0.28.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "diskcache" },
     { name = "neo4j" },
     { name = "numpy" },
     { name = "openai" },
@@ -245,9 +235,9 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/07/5e/68967dfd0239378009df7d7f48f7e27a7c4cad73618b41842fbf925c3e4b/graphiti_core-0.25.5.tar.gz", hash = "sha256:b5790bf8efdb07ef608152880d6f951e8dcc4f351ecd1a798af0b57b9b8a384e", size = 6642249 }
+sdist = { url = "https://files.pythonhosted.org/packages/62/6d/81b78aec2030bff0030bbabb8b227a6fa3c5fb49fb11e8501e7d0f39f3fe/graphiti_core-0.28.2.tar.gz", hash = "sha256:9b2a72f117827e015a21b610eb2c3acbe05310b79736abef7372e81247578e9d", size = 6846195 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c0/17/3145f7eba39a180fc1db2f389b6ca66599db1c73fafac820076da3a779aa/graphiti_core-0.25.5-py3-none-any.whl", hash = "sha256:cbe0cd4f87878ef4256078a4eafcce36b6010100e4f9112106f1fd93f605c082", size = 186489 },
+    { url = "https://files.pythonhosted.org/packages/81/cd/e6203f1fee0a8e2a797f2d5f9a867513e0c63af4e19fdd1c5a7e14a47670/graphiti_core-0.28.2-py3-none-any.whl", hash = "sha256:4e1c19b7bc70a73a612a473144ed4b3fe615ac6d4c5d6b10f48e206a858bcb53", size = 314919 },
 ]
 
 [[package]]
@@ -374,8 +364,8 @@ dev = [
 requires-dist = [
     { name = "debugpy" },
     { name = "fastapi" },
-    { name = "graphiti-core", specifier = ">=0.25.5" },
-    { name = "graphiti-core", marker = "extra == 'graphiti'", specifier = ">=0.25.0,<0.26.0" },
+    { name = "graphiti-core", specifier = ">=0.28.2" },
+    { name = "graphiti-core", marker = "extra == 'graphiti'", specifier = ">=0.28.2" },
     { name = "httpx" },
     { name = "langfuse" },
     { name = "openai" },

@@ -5,8 +5,8 @@
   "scripts": {
     "dev": "uv run python -m debugpy --listen 0.0.0.0:5678 -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
     "start": "uv run python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
-    "build": "UV_NO_PROGRESS=1 uv sync -v",
-    "build:graphiti": "UV_NO_PROGRESS=1 uv sync -v --extra graphiti",
+    "build": "uv venv --python 3.12 && UV_NO_PROGRESS=1 uv sync -v",
+    "build:graphiti": "uv venv --python 3.12 && UV_NO_PROGRESS=1 uv sync -v --extra graphiti",
     "sync:langfuse": "uv run python scripts/sync_to_langfuse.py --repo-root .",
     "clean:langfuse:prompts": "uv run python scripts/clean_langfuse_prompts.py --repo-root .",
     "lint": "uv run ruff check .",

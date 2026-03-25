@@ -18,13 +18,13 @@ dependencies = [
     "tenacity",
     "psycopg[binary]>=3.3.3",
     "pymupdf>=1.27.2.2",
-    "graphiti-core>=0.25.5",
+    "graphiti-core>=0.28.2",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.11.0"]
 graphiti = [
-    "graphiti-core>=0.25.0,<0.26.0",  # graphiti-core requires neo4j>=5.26.0
+    "graphiti-core>=0.28.2",  # graphiti-core requires neo4j>=5.26.0
 ]
 
 
