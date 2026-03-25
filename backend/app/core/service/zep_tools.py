@@ -10,8 +10,8 @@ Primary tools (optimized):
 from pathlib import Path
 from typing import Any
 
-from zep_cloud.client import Zep
-
+from app.core.backend_client_factory.client_factory import create_zep_client
+from app.core.backend_client_factory.schema import ZepClientAdapter
 from app.core.config import Config
 from app.core.langfuse_versioning.prompt_provider import PromptProvider, make_prompt_provider
 from app.core.llm.factory import create_openai_provider
@@ -23,7 +23,7 @@ from app.core.schemas.zep_operation import (
     SearchResult,
     SubGraphSearchResult,
 )
-from app.core.service.zep_service import fetch_all_edges, fetch_all_nodes
+from app.core.service.retrieval import fetch_all_edges, fetch_all_nodes
 from app.core.utils.logger import get_logger
 from app.core.utils.retry import call_with_retry
 
@@ -53,10 +53,10 @@ class ZepToolsService:
         prompt_provider: PromptProvider | None = None,
     ):
         self.api_key = api_key or Config.ZEP_API_KEY
-        if not self.api_key:
-            raise ValueError("ZEP_API_KEY is not configured")
-
-        self.client = Zep(api_key=self.api_key)
+        self.client: ZepClientAdapter = create_zep_client(
+            backend=Config.ZEP_BACKEND,
+            api_key=self.api_key,
+        )
         # Lazy LLM for InsightForge sub-queries
         self._llm_provider = llm_provider
         base_dir = Path(__file__).resolve().parent.parent / "langfuse_versioning"
@@ -112,7 +112,7 @@ class ZepToolsService:
         # Prefer Zep Cloud search API
         try:
             search_results = self._call_with_retry(
-                func=lambda: self.client.graph.search(
+                func=lambda: self.client.search(
                     graph_id=graph_id,
                     query=query,
                     limit=limit,
@@ -126,32 +126,30 @@ class ZepToolsService:
             edges = []
             nodes = []
 
-            if hasattr(search_results, "edges") and search_results.edges:
-                for edge in search_results.edges:
-                    if hasattr(edge, "fact") and edge.fact:
-                        facts.append(edge.fact)
-                    edges.append(
-                        {
-                            "uuid": getattr(edge, "uuid_", None) or getattr(edge, "uuid", ""),
-                            "name": getattr(edge, "name", ""),
-                            "fact": getattr(edge, "fact", ""),
-                            "source_node_uuid": getattr(edge, "source_node_uuid", ""),
-                            "target_node_uuid": getattr(edge, "target_node_uuid", ""),
-                        }
-                    )
+            for edge in (search_results.edges or []):
+                if edge.fact:
+                    facts.append(edge.fact)
+                edges.append(
+                    {
+                        "uuid": edge.uuid or "",
+                        "name": edge.name or "",
+                        "fact": edge.fact or "",
+                        "source_node_uuid": edge.source_node_uuid or "",
+                        "target_node_uuid": edge.target_node_uuid or "",
+                    }
+                )
 
-            if hasattr(search_results, "nodes") and search_results.nodes:
-                for node in search_results.nodes:
-                    nodes.append(
-                        {
-                            "uuid": getattr(node, "uuid_", None) or getattr(node, "uuid", ""),
-                            "name": getattr(node, "name", ""),
-                            "labels": getattr(node, "labels", []),
-                            "summary": getattr(node, "summary", ""),
-                        }
-                    )
-                    if hasattr(node, "summary") and node.summary:
-                        facts.append(f"[{node.name}]: {node.summary}")
+            for node in (search_results.nodes or []):
+                nodes.append(
+                    {
+                        "uuid": node.uuid or "",
+                        "name": node.name or "",
+                        "labels": node.labels or [],
+                        "summary": node.summary or "",
+                    }
+                )
+                if node.summary:
+                    facts.append(f"[{node.name}]: {node.summary}")
 
             logger.info(f"Search completed: found {len(facts)} related facts")
 
@@ -341,7 +339,7 @@ class ZepToolsService:
 
         try:
             node = self._call_with_retry(
-                func=lambda: self.client.graph.node.get(uuid_=node_uuid),
+                func=lambda: self.client.get_node(node_uuid),
                 operation_name=f"Getting node detail(uuid={node_uuid[:8]}...)",
             )
 
@@ -349,7 +347,7 @@ class ZepToolsService:
                 return None
 
             return NodeInfo(
-                uuid=getattr(node, "uuid_", None) or getattr(node, "uuid", ""),
+                uuid=node.uuid or "",
                 name=node.name or "",
                 labels=node.labels or [],
                 summary=node.summary or "",

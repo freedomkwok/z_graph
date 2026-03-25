@@ -12,12 +12,12 @@ from app.core.backend_client_factory.schema import (
 )
 
 class ZepCloudClient(ZepClientAdapter):
+    _DEFAULT_PAGE_SIZE = 100
+
     def __init__(self, api_key: str):
         if not api_key:
             raise ValueError("ZEP_API_KEY is not configured")
         self._client = Zep(api_key=api_key)
-        # Compatibility with direct Zep SDK usage:
-        # GraphBuilderService expects self.client.graph.* calls.
         self.graph = self._client.graph
 
     @property
@@ -89,8 +89,27 @@ class ZepCloudClient(ZepClientAdapter):
         )
 
     def get_all_nodes(self, graph_id: str) -> List[GraphNode]:
-        nodes = self.client.graph.node.get_by_graph_id(graph_id=graph_id)
-        return [self._convert_node(node) for node in nodes]
+        all_nodes: List[GraphNode] = []
+        cursor: Optional[str] = None
+
+        while True:
+            kwargs: Dict[str, Any] = {"limit": self._DEFAULT_PAGE_SIZE}
+            if cursor is not None:
+                kwargs["uuid_cursor"] = cursor
+
+            batch = self.client.graph.node.get_by_graph_id(graph_id=graph_id, **kwargs)
+            if not batch:
+                break
+
+            all_nodes.extend(self._convert_node(node) for node in batch)
+            if len(batch) < self._DEFAULT_PAGE_SIZE:
+                break
+
+            cursor = getattr(batch[-1], "uuid_", None) or getattr(batch[-1], "uuid", None)
+            if not cursor:
+                break
+
+        return all_nodes
 
     def get_node(self, node_uuid: str) -> Optional[GraphNode]:
         try:
@@ -109,8 +128,27 @@ class ZepCloudClient(ZepClientAdapter):
     # ==================== Edge 操作 ====================
 
     def get_all_edges(self, graph_id: str) -> List[GraphEdge]:
-        edges = self.client.graph.edge.get_by_graph_id(graph_id=graph_id)
-        return [self._convert_edge(edge) for edge in edges]
+        all_edges: List[GraphEdge] = []
+        cursor: Optional[str] = None
+
+        while True:
+            kwargs: Dict[str, Any] = {"limit": self._DEFAULT_PAGE_SIZE}
+            if cursor is not None:
+                kwargs["uuid_cursor"] = cursor
+
+            batch = self.client.graph.edge.get_by_graph_id(graph_id=graph_id, **kwargs)
+            if not batch:
+                break
+
+            all_edges.extend(self._convert_edge(edge) for edge in batch)
+            if len(batch) < self._DEFAULT_PAGE_SIZE:
+                break
+
+            cursor = getattr(batch[-1], "uuid_", None) or getattr(batch[-1], "uuid", None)
+            if not cursor:
+                break
+
+        return all_edges
 
     # ==================== Search 操作 ====================
 

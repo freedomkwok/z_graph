@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import * as d3 from "d3";
 
+import GraphDetailPanel from "./GraphDetailPanel";
+import GraphInspectorPanel from "./GraphInspectorPanel";
 import { useTaskStore } from "./taskStore";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
@@ -42,7 +44,7 @@ function resolveGraphEmbedUrl(project) {
 }
 
 function getGraphId(project) {
-  return String(project?.zep_graph_id ?? project?.graph_id ?? project?.project_id ?? "").trim();
+  return String(project?.zep_graph_id ?? project?.graph_id ?? "").trim();
 }
 
 function getEntityType(node) {
@@ -121,6 +123,8 @@ export default function GraphEmbedPanel() {
   const clearSelectionRef = useRef(() => {});
   const addSystemLogRef = useRef(addSystemLog);
   const fetchInFlightRef = useRef(false);
+  const previousGraphTaskStatusRef = useRef(state.graphTask.status);
+  const graphDataCacheRef = useRef(new Map());
   const [graphData, setGraphData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -132,17 +136,6 @@ export default function GraphEmbedPanel() {
   const [edgeTypeSearchText, setEdgeTypeSearchText] = useState("");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState("entity");
-  const projectUpdateToken = useMemo(() => {
-    const project = state.currentProject;
-    if (!project) return "";
-    return [
-      String(project.project_id ?? ""),
-      String(project.updated_at ?? ""),
-      String(project.status ?? ""),
-      String(project.graph_build_task_id ?? ""),
-      String(project.zep_graph_id ?? project.graph_id ?? ""),
-    ].join("|");
-  }, [state.currentProject]);
 
   const { types: entityTypes, typeToColor } = useMemo(
     () => buildEntityTypeList(Array.isArray(graphData?.nodes) ? graphData.nodes : []),
@@ -293,7 +286,9 @@ export default function GraphEmbedPanel() {
         if (!response.ok || !payload?.success) {
           throw new Error(payload?.error ?? "Failed to fetch graph data");
         }
-        setGraphData(payload.data ?? null);
+        const nextGraphData = payload.data ?? null;
+        graphDataCacheRef.current.set(graphId, nextGraphData);
+        setGraphData(nextGraphData);
         setError("");
         if (!silent) {
           const nodeCount = payload?.data?.node_count ?? payload?.data?.nodes?.length ?? 0;
@@ -314,6 +309,7 @@ export default function GraphEmbedPanel() {
   );
 
   useEffect(() => {
+    // Reset current panel view whenever project/graph selection changes.
     setSelectedItem(null);
     setSelectedEntityTypes(null);
     setSelectedEdgeTypes(null);
@@ -321,8 +317,42 @@ export default function GraphEmbedPanel() {
     setEdgeTypeSearchText("");
     setInspectorTab("entity");
     setInspectorOpen(false);
+    if (!graphId) {
+      setGraphData(null);
+      setError("");
+      setLoading(false);
+      return;
+    }
+
+    if (graphDataCacheRef.current.has(graphId)) {
+      setGraphData(graphDataCacheRef.current.get(graphId) ?? null);
+      setError("");
+      setLoading(false);
+      return;
+    }
+
+    setGraphData(null);
+    setError("");
+    setLoading(false);
     fetchGraphData();
-  }, [fetchGraphData, projectUpdateToken, state.iframeVersion]);
+  }, [fetchGraphData, graphId]);
+
+  useEffect(() => {
+    // Auto-refresh only after a graph build finishes.
+    const previousStatus = previousGraphTaskStatusRef.current;
+    const currentStatus = state.graphTask.status;
+    previousGraphTaskStatusRef.current = currentStatus;
+
+    const completedBuild = previousStatus === "running" && currentStatus === "success";
+    if (!completedBuild) return;
+    fetchGraphData();
+  }, [fetchGraphData, state.graphTask.status]);
+
+  useEffect(() => {
+    // Manual refresh trigger from "Refresh graph data" button.
+    if (!state.iframeVersion) return;
+    fetchGraphData();
+  }, [fetchGraphData, state.iframeVersion]);
 
   useEffect(() => {
     if (!selectedItem) return;
@@ -1011,175 +1041,30 @@ export default function GraphEmbedPanel() {
 
         {graphData?.nodes?.length > 0 && inspectorOpen && (
           <>
-            <div className="graph-legend graph-inspector-panel">
-              <div className="graph-inspector-tabs">
-                <button
-                  className={`graph-inspector-tab ${inspectorTab === "entity" ? "active" : ""}`}
-                  type="button"
-                  onClick={() => setInspectorTab("entity")}
-                >
-                  Entity Types
-                </button>
-                <button
-                  className={`graph-inspector-tab ${inspectorTab === "edgeList" ? "active" : ""}`}
-                  type="button"
-                  onClick={() => setInspectorTab("edgeList")}
-                >
-                  Edges
-                </button>
-                <button
-                  className={`graph-inspector-tab ${inspectorTab === "edgeStats" ? "active" : ""}`}
-                  type="button"
-                  onClick={() => setInspectorTab("edgeStats")}
-                >
-                  Edge Statistics
-                </button>
-              </div>
-              {inspectorTab === "entity" ? (
-                <div className="entity-filter-panel">
-                  <div className="entity-filter-head">
-                    <span className="legend-title">Entity Types</span>
-                    <div className="entity-filter-actions">
-                      <button
-                        className="entity-filter-btn"
-                        type="button"
-                        onClick={handleSelectAllEntityTypes}
-                        disabled={allTypesSelected}
-                      >
-                        All
-                      </button>
-                      <button
-                        className="entity-filter-btn"
-                        type="button"
-                        onClick={handleClearEntityTypes}
-                        disabled={selectedTypeCount === 0}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  </div>
-                  <input
-                    className="graph-inspector-search"
-                    type="text"
-                    value={entityTypeSearchText}
-                    onChange={(event) => setEntityTypeSearchText(event.target.value)}
-                    placeholder="Filter entity types..."
-                  />
-                  <div className="entity-filter-list">
-                    {visibleEntityTypeOptions.length > 0 ? (
-                      visibleEntityTypeOptions.map((type) => (
-                        <label className="legend-item entity-filter-item" key={type.name}>
-                          <input
-                            className="entity-filter-checkbox"
-                            type="checkbox"
-                            checked={activeEntityTypeSet.has(type.name)}
-                            onChange={() => toggleEntityType(type.name)}
-                          />
-                          <span className="legend-dot" style={{ background: type.color }} />
-                          <span className="legend-label">{type.name}</span>
-                        </label>
-                      ))
-                    ) : (
-                      <div className="graph-inspector-empty">
-                        No entity types match the filter text.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ) : inspectorTab === "edgeList" ? (
-                <div className="entity-filter-panel">
-                  <div className="entity-filter-head">
-                    <span className="legend-title">Edges</span>
-                    <div className="entity-filter-actions">
-                      <button
-                        className="entity-filter-btn"
-                        type="button"
-                        onClick={handleSelectAllEdgeTypes}
-                        disabled={allEdgeTypesSelected}
-                      >
-                        All
-                      </button>
-                      <button
-                        className="entity-filter-btn"
-                        type="button"
-                        onClick={handleClearEdgeTypes}
-                        disabled={selectedEdgeTypeCount === 0}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  </div>
-                  <input
-                    className="graph-inspector-search"
-                    type="text"
-                    value={edgeTypeSearchText}
-                    onChange={(event) => setEdgeTypeSearchText(event.target.value)}
-                    placeholder="Filter edge types..."
-                  />
-                  <div className="entity-filter-list">
-                    {visibleEdgeTypeOptions.length > 0 ? (
-                      visibleEdgeTypeOptions.map((type) => (
-                        <label className="legend-item entity-filter-item edge-filter-item" key={type.name}>
-                          <input
-                            className="entity-filter-checkbox"
-                            type="checkbox"
-                            checked={activeEdgeTypeSet.has(type.name)}
-                            onChange={() => toggleEdgeType(type.name)}
-                          />
-                          <span className="legend-label edge-filter-label">{type.name}</span>
-                          <span className="edge-filter-count">{type.count}</span>
-                        </label>
-                      ))
-                    ) : (
-                      <div className="graph-inspector-empty">No edges match the filter text.</div>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div className="edge-stats-panel">
-                  {selectedEdgeStats ? (
-                    <>
-                      <div className="edge-stats-relation-name">
-                        Relation: {selectedEdgeStats.relation}
-                      </div>
-                      <div className="graph-detail-columns edge-stats-columns">
-                        <div className="graph-detail-column">
-                          <span className="graph-detail-column-label">Similar (Pair)</span>
-                          <span className="graph-detail-column-value">
-                            {selectedEdgeStats.sameRelationPairCount}
-                          </span>
-                        </div>
-                        <div className="graph-detail-column">
-                          <span className="graph-detail-column-label">Similar (Direction)</span>
-                          <span className="graph-detail-column-value">
-                            {selectedEdgeStats.sameRelationDirectedCount}
-                          </span>
-                        </div>
-                        <div className="graph-detail-column">
-                          <span className="graph-detail-column-label">Parallel (Pair)</span>
-                          <span className="graph-detail-column-value">
-                            {selectedEdgeStats.sameUndirectedPairCount}
-                          </span>
-                        </div>
-                        <div className="graph-detail-column">
-                          <span className="graph-detail-column-label">Relation (Graph)</span>
-                          <span className="graph-detail-column-value">
-                            {selectedEdgeStats.sameRelationGlobalCount}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="edge-stats-episodes-total">
-                        Episodes (Total: {selectedEdgeEpisodeIds.length})
-                      </div>
-                    </>
-                  ) : (
-                    <div className="graph-inspector-empty">
-                      Select a relationship in the graph to view similar-edge statistics.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            <GraphInspectorPanel
+              inspectorTab={inspectorTab}
+              setInspectorTab={setInspectorTab}
+              handleSelectAllEntityTypes={handleSelectAllEntityTypes}
+              allTypesSelected={allTypesSelected}
+              handleClearEntityTypes={handleClearEntityTypes}
+              selectedTypeCount={selectedTypeCount}
+              entityTypeSearchText={entityTypeSearchText}
+              setEntityTypeSearchText={setEntityTypeSearchText}
+              visibleEntityTypeOptions={visibleEntityTypeOptions}
+              activeEntityTypeSet={activeEntityTypeSet}
+              toggleEntityType={toggleEntityType}
+              handleSelectAllEdgeTypes={handleSelectAllEdgeTypes}
+              allEdgeTypesSelected={allEdgeTypesSelected}
+              handleClearEdgeTypes={handleClearEdgeTypes}
+              selectedEdgeTypeCount={selectedEdgeTypeCount}
+              edgeTypeSearchText={edgeTypeSearchText}
+              setEdgeTypeSearchText={setEdgeTypeSearchText}
+              visibleEdgeTypeOptions={visibleEdgeTypeOptions}
+              activeEdgeTypeSet={activeEdgeTypeSet}
+              toggleEdgeType={toggleEdgeType}
+              selectedEdgeStats={selectedEdgeStats}
+              selectedEdgeEpisodeIds={selectedEdgeEpisodeIds}
+            />
 
             <div className="graph-edge-label-toggle">
               <label className="toggle-switch">
@@ -1195,197 +1080,14 @@ export default function GraphEmbedPanel() {
           </>
         )}
 
-        {selectedItem && (
-          <aside className="graph-detail-panel">
-            <div className="graph-detail-head">
-              <div className="graph-detail-title-wrap">
-                <span className="graph-detail-title">
-                  {selectedItem.type === "node" ? "Node Details" : "Relationship"}
-                </span>
-                {selectedItem.type === "node" && (
-                  <span
-                    className="graph-detail-type-badge"
-                    style={{ background: selectedItem.color || "#8f8f8f" }}
-                  >
-                    {selectedItem.entityType || "Entity"}
-                  </span>
-                )}
-              </div>
-              <button className="graph-detail-close" type="button" onClick={closeDetail}>
-                ×
-              </button>
-            </div>
-
-            <div className="graph-detail-body">
-              {selectedItem.type === "node" ? (
-                <>
-                  <div className="graph-detail-row">
-                    <span className="graph-detail-label">Name</span>
-                    <span className="graph-detail-value">{selectedItem.data?.name || "Unnamed"}</span>
-                  </div>
-                  <div className="graph-detail-row">
-                    <span className="graph-detail-label">UUID</span>
-                    <span className="graph-detail-value mono">
-                      {selectedItem.data?.uuid || "-"}
-                    </span>
-                  </div>
-                  <div className="graph-detail-row">
-                    <span className="graph-detail-label">Created</span>
-                    <span className="graph-detail-value">
-                      {formatDateTime(selectedItem.data?.created_at)}
-                    </span>
-                  </div>
-                  <div className="graph-detail-columns">
-                    <div className="graph-detail-column">
-                      <span className="graph-detail-column-label">Total Edges</span>
-                      <span className="graph-detail-column-value">
-                        {nodeEdgeStatsByNode.get(String(selectedItem.data?.uuid ?? ""))?.total ?? 0}
-                      </span>
-                    </div>
-                    <div className="graph-detail-column">
-                      <span className="graph-detail-column-label">Incoming</span>
-                      <span className="graph-detail-column-value">
-                        {nodeEdgeStatsByNode.get(String(selectedItem.data?.uuid ?? ""))?.incoming ?? 0}
-                      </span>
-                    </div>
-                    <div className="graph-detail-column">
-                      <span className="graph-detail-column-label">Outgoing</span>
-                      <span className="graph-detail-column-value">
-                        {nodeEdgeStatsByNode.get(String(selectedItem.data?.uuid ?? ""))?.outgoing ?? 0}
-                      </span>
-                    </div>
-                  </div>
-
-                  {selectedItem.data?.summary ? (
-                    <div className="graph-detail-section">
-                      <div className="graph-detail-section-title">Summary</div>
-                      <div className="graph-detail-summary">{selectedItem.data.summary}</div>
-                    </div>
-                  ) : null}
-
-                  {selectedItem.data?.labels?.length ? (
-                    <div className="graph-detail-section">
-                      <div className="graph-detail-section-title">Labels</div>
-                      <div className="graph-detail-tag-list">
-                        {selectedItem.data.labels.map((label) => (
-                          <span className="graph-detail-tag" key={label}>
-                            {label}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {selectedItem.data?.attributes &&
-                  Object.keys(selectedItem.data.attributes).length > 0 ? (
-                    <div className="graph-detail-section">
-                      <div className="graph-detail-section-title">Properties</div>
-                      <div className="graph-detail-property-list">
-                        {Object.entries(selectedItem.data.attributes).map(([key, value]) => (
-                          <div className="graph-detail-property" key={key}>
-                            <span className="graph-detail-property-key">{key}</span>
-                            <span className="graph-detail-property-value">
-                              {formatFieldValue(value)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </>
-              ) : selectedItem.data?.isSelfLoopGroup ? (
-                <>
-                  <div className="graph-detail-row">
-                    <span className="graph-detail-label">Node</span>
-                    <span className="graph-detail-value">
-                      {selectedItem.data?.source_name || "Unknown"}
-                    </span>
-                  </div>
-                  <div className="graph-detail-row">
-                    <span className="graph-detail-label">Self Relations</span>
-                    <span className="graph-detail-value">
-                      {selectedItem.data?.selfLoopCount || 0}
-                    </span>
-                  </div>
-                  <div className="graph-detail-section">
-                    <div className="graph-detail-section-title">Details</div>
-                    <div className="graph-detail-property-list">
-                      {(selectedItem.data?.selfLoopEdges || []).map((edge, index) => (
-                        <div className="graph-detail-property" key={edge.uuid || `${index}`}>
-                          <span className="graph-detail-property-key">
-                            {edge.name || edge.fact_type || `Relation #${index + 1}`}
-                          </span>
-                          <span className="graph-detail-property-value">
-                            {edge.fact || formatFieldValue(edge.uuid)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="graph-detail-row">
-                    <span className="graph-detail-label">Source</span>
-                    <span className="graph-detail-value">
-                      {selectedItem.data?.source_name ||
-                        selectedItem.data?.source_node_name ||
-                        selectedItem.data?.source_node_uuid ||
-                        "-"}
-                    </span>
-                  </div>
-                  <div className="graph-detail-row">
-                    <span className="graph-detail-label">Target</span>
-                    <span className="graph-detail-value">
-                      {selectedItem.data?.target_name ||
-                        selectedItem.data?.target_node_name ||
-                        selectedItem.data?.target_node_uuid ||
-                        "-"}
-                    </span>
-                  </div>
-                  <div className="graph-detail-row">
-                    <span className="graph-detail-label">Relation</span>
-                    <span className="graph-detail-value">
-                      {selectedItem.data?.name || selectedItem.data?.fact_type || "RELATED"}
-                    </span>
-                  </div>
-                  <div className="graph-detail-row">
-                    <span className="graph-detail-label">UUID</span>
-                    <span className="graph-detail-value mono">
-                      {selectedItem.data?.uuid || "-"}
-                    </span>
-                  </div>
-                  <div className="graph-detail-row">
-                    <span className="graph-detail-label">Fact</span>
-                    <span className="graph-detail-value">
-                      {selectedItem.data?.fact || "None"}
-                    </span>
-                  </div>
-                  <div className="graph-detail-row">
-                    <span className="graph-detail-label">Created</span>
-                    <span className="graph-detail-value">
-                      {formatDateTime(selectedItem.data?.created_at)}
-                    </span>
-                  </div>
-                  {selectedEdgeEpisodeIds.length ? (
-                    <div className="graph-detail-section">
-                      <div className="graph-detail-section-title">
-                        Episodes (Total: {selectedEdgeEpisodeIds.length})
-                      </div>
-                      <div className="graph-detail-episode-list">
-                        {selectedEdgeEpisodeIds.map((episode) => (
-                          <div className="graph-detail-episode-item" key={episode}>
-                            {episode}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </>
-              )}
-            </div>
-          </aside>
-        )}
+        <GraphDetailPanel
+          selectedItem={selectedItem}
+          closeDetail={closeDetail}
+          formatDateTime={formatDateTime}
+          formatFieldValue={formatFieldValue}
+          nodeEdgeStatsByNode={nodeEdgeStatsByNode}
+          selectedEdgeEpisodeIds={selectedEdgeEpisodeIds}
+        />
       </div>
     </section>
   );

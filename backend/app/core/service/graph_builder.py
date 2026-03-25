@@ -9,10 +9,11 @@ from zep_cloud import EntityEdgeSourceTarget, EpisodeData
 
 from app.core.config import Config
 from app.core.backend_client_factory.client_factory import create_zep_client
+from app.core.backend_client_factory.schema import ZepClientAdapter
 from app.core.managers.task_manager import TaskManager
 from app.core.schemas.task import TaskStatus
 from app.core.schemas.zep_operation import GraphInfo
-from app.core.service.zep_service import fetch_all_edges, fetch_all_nodes
+from app.core.service.retrieval import fetch_all_edges, fetch_all_nodes
 from app.core.utils.text_processor import TextProcessor
 from pydantic import Field
 from zep_cloud.external_clients.ontology import EdgeModel, EntityModel, EntityText
@@ -27,14 +28,14 @@ class GraphBuilderService:
     def __init__(
         self,
         api_key: str | None = None,
-        client: Any | None = None,
+        client: ZepClientAdapter | None = None,
         backend: str | None = None,
     ):
         self.backend = backend
         self.api_key = api_key or Config.ZEP_API_KEY
 
         # If caller provides a client, we trust it and only validate interface shape/signatures.
-        self.client = client or create_zep_client(
+        self.client: ZepClientAdapter = client or create_zep_client(
             backend=self.backend,
             api_key=self.api_key,
         )
@@ -488,7 +489,9 @@ class GraphBuilderService:
         # UUID -> name for edge endpoints
         node_map = {}
         for node in nodes:
-            node_map[node.uuid_] = node.name or ""
+            node_uuid = getattr(node, "uuid_", None) or getattr(node, "uuid", None)
+            if node_uuid:
+                node_map[str(node_uuid)] = node.name or ""
 
         nodes_data = []
         for node in nodes:
@@ -499,7 +502,7 @@ class GraphBuilderService:
 
             nodes_data.append(
                 {
-                    "uuid": node.uuid_,
+                    "uuid": str(getattr(node, "uuid_", None) or getattr(node, "uuid", "") or ""),
                     "name": node.name,
                     "labels": node.labels or [],
                     "summary": node.summary or "",
@@ -525,17 +528,19 @@ class GraphBuilderService:
 
             # fact_type
             fact_type = getattr(edge, "fact_type", None) or edge.name or ""
+            source_node_uuid = str(getattr(edge, "source_node_uuid", "") or "")
+            target_node_uuid = str(getattr(edge, "target_node_uuid", "") or "")
 
             edges_data.append(
                 {
-                    "uuid": edge.uuid_,
+                    "uuid": str(getattr(edge, "uuid_", None) or getattr(edge, "uuid", "") or ""),
                     "name": edge.name or "",
                     "fact": edge.fact or "",
                     "fact_type": fact_type,
-                    "source_node_uuid": edge.source_node_uuid,
-                    "target_node_uuid": edge.target_node_uuid,
-                    "source_node_name": node_map.get(edge.source_node_uuid, ""),
-                    "target_node_name": node_map.get(edge.target_node_uuid, ""),
+                    "source_node_uuid": source_node_uuid,
+                    "target_node_uuid": target_node_uuid,
+                    "source_node_name": node_map.get(source_node_uuid, ""),
+                    "target_node_name": node_map.get(target_node_uuid, ""),
                     "attributes": edge.attributes or {},
                     "created_at": str(created_at) if created_at else None,
                     "valid_at": str(valid_at) if valid_at else None,

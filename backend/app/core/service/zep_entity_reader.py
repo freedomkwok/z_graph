@@ -6,13 +6,13 @@ Loads nodes from a Zep graph and keeps nodes whose labels match defined entity t
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-from zep_cloud.client import Zep
-
+from app.core.backend_client_factory.client_factory import create_zep_client
+from app.core.backend_client_factory.schema import ZepClientAdapter
 from app.core.config import Config
 from app.core.schemas.zep_operation import EntityNode, FilteredEntities
+from app.core.service.retrieval import fetch_all_edges, fetch_all_nodes
 from app.core.utils.logger import get_logger
 from app.core.utils.retry import call_with_retry
-from app.core.utils.zep_service import fetch_all_edges, fetch_all_nodes
 
 logger = get_logger('zep_graph.zep_entity_reader')
 T = TypeVar('T')
@@ -27,10 +27,10 @@ class ZepEntityReader:
     
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or Config.ZEP_API_KEY
-        if not self.api_key:
-            raise ValueError("ZEP_API_KEY is missing")
-        
-        self.client = Zep(api_key=self.api_key)
+        self.client: ZepClientAdapter = create_zep_client(
+            backend=Config.ZEP_BACKEND,
+            api_key=self.api_key,
+        )
     
     def _call_with_retry(
         self, 
@@ -103,7 +103,7 @@ class ZepEntityReader:
     def get_node_edges(self, node_uuid: str) -> list[dict[str, Any]]:
         try:
             edges = self._call_with_retry(
-                func=lambda: self.client.graph.node.get_entity_edges(node_uuid=node_uuid),
+                func=lambda: self.client.get_node_edges(node_uuid),
                 operation_name=f"Retrieve NodeEdges(node={node_uuid[:8]})"
             )
             
@@ -256,7 +256,7 @@ class ZepEntityReader:
         try:
             # Node fetch with retry
             node = self._call_with_retry(
-                func=lambda: self.client.graph.node.get(uuid_=entity_uuid),
+                func=lambda: self.client.get_node(entity_uuid),
                 operation_name=f"entity_detail(uuid={entity_uuid[:8]}...)"
             )
             
