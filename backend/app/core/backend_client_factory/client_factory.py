@@ -57,7 +57,7 @@ def _create_graphiti_client(
 
     logger.info(f"Create Graphiti Local Client: {uri}")
     if dsn:
-        from graphiti_core.graph.driver import OracleDriver
+        from graphiti_core.driver.oracle_driver import OracleDriver
         return GraphitiClient(
             graph_driver=OracleDriver(dsn=dsn, user=user, password=password)
         )
