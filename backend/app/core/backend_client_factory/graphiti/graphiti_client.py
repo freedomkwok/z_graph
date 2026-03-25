@@ -112,9 +112,9 @@ def _create_dashscope_embedder_wrapper(base_embedder: Any, max_batch_size: int =
 class GraphitiClient(ZepClientAdapter):
     def __init__(
         self,
-        graphdb_uri: str,
-        graphdb_user: str,
-        graphdb_password: str,
+        graphdb_uri: str | None = None,
+        graphdb_user: str | None = None,
+        graphdb_password: str | None = None,
         llm_client: Optional[Any] = None,
         embedder: Optional[Any] = None,
         graph_driver: GraphDriver | None = None,
