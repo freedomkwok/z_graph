@@ -1,0 +1,134 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: z-graph
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zep-graph-config
+  namespace: z-graph
+data:
+  APP_NAME: zep_graph_backend
+  APP_ENV: production
+  API_PREFIX: /api
+  HOST: 0.0.0.0
+  PORT: "8000"
+  STORAGE: postgres
+  POSTGRES_HOST: postgres.z-graph.svc.cluster.local
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: z_graph
+  POSTGRES_USER: z_graph
+  GRAPHDB_URI: bolt://neo4j.z-graph.svc.cluster.local:7687
+  GRAPHDB_USER: neo4j
+  ZEP_BACKEND: graphiti
+  GRAPHITI_LLM_MODEL: gpt-5.2
+  GRAPHITI_LLM_SMALL_MODEL: gpt-4o-mini
+  GRAPHITI_EMBEDDING_MODEL: text-embedding-3-large
+  GRAPHITI_EMBEDDING_BASE_URL: https://api.openai.com/v1
+  LLM_PROVIDER: openai
+  LLM_BASE_URL: https://api.openai.com/v1
+  LLM_MODEL_NAME: gpt-5.2
+  OPENAI_BASE_URL: https://api.openai.com/v1
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: zep-graph-secrets
+  namespace: z-graph
+type: Opaque
+stringData:
+  PROJECT_STORAGE_CONNECTION_STRING: postgresql://z_graph:z_graph_password@postgres.z-graph.svc.cluster.local:5432/z_graph
+  POSTGRES_PASSWORD: z_graph_password
+  GRAPHDB_PASSWORD: password
+  LLM_API_KEY: replace-me
+  OPENAI_API_KEY: replace-me
+  GRAPHITI_EMBEDDING_API_KEY: replace-me
+  LANGFUSE_PUBLIC_KEY: replace-me
+  LANGFUSE_SECRET_KEY: replace-me
+  LANGFUSE_BASE_URL: http://langfuse-web.langfuse.svc.cluster.local:3000
+  ZEP_API_KEY: replace-me
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zep-graph-app
+  namespace: z-graph
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zep-graph-app
+  template:
+    metadata:
+      labels:
+        app: zep-graph-app
+    spec:
+      containers:
+        - name: app
+          image: your-registry/zep-graph:prod
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: zep-graph-config
+            - secretRef:
+                name: zep-graph-secrets
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zep-graph-app
+  namespace: z-graph
+spec:
+  selector:
+    app: zep-graph-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zep-graph-app
+  namespace: z-graph
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: zep-graph.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zep-graph-app
+                port:
+                  number: 80
