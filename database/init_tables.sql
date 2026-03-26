@@ -1,4 +1,4 @@
--- zep_graph project storage schema
+-- z_graph project storage schema
 CREATE TABLE IF NOT EXISTS prompt_labels (
     name TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,

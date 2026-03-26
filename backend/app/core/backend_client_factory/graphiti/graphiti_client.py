@@ -13,7 +13,7 @@ from app.core.backend_client_factory.schema import (
 )
 from app.core.utils.langfuse import create_graphiti_langfuse_tracer
 from graphiti_core.driver.driver import GraphDriver
-logger = logging.getLogger('zep_graph.graphiti_client')
+logger = logging.getLogger('z_graph.graphiti_client')
 
 _async_loop: Optional[asyncio.AbstractEventLoop] = None
 _async_thread: Optional[threading.Thread] = None

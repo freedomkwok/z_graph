@@ -17,7 +17,7 @@ COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 COPY backend/app ./app
-COPY backend/.env.example ./.env.example
+# COPY backend/.env.example ./.env.example
 COPY --from=frontend-builder /frontend/dist ./app/static
 
 EXPOSE 8000

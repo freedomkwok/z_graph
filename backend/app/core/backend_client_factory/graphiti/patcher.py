@@ -4,7 +4,7 @@ from typing import Any, Dict
 import logging
 from graphiti_core.utils import bulk_utils
 
-logger = logging.getLogger('zep_graph.graphiti_patch')
+logger = logging.getLogger('z_graph.graphiti_patch')
 _patch_applied = False
 
 def sanitize_for_graphdb(value: Any, path: str = "") -> Any:

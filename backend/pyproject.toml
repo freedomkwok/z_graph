@@ -1,9 +1,9 @@
 [project]
 name = "imp-graph-backend"
 version = "0.1.0"
-description = "zep_graph backend service"
+description = "z_graph backend service"
 requires-python = ">=3.11"
-authors = [{ name = "zep_graph Team" }]
+authors = [{ name = "z_graph Team" }]
 dependencies = [
     "fastapi",
     "uvicorn[standard]",

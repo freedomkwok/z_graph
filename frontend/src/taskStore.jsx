@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useReducer, useRef } from "react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
-const LAST_PROJECT_ID_KEY = "zep_graph.last_project_id";
+const LAST_PROJECT_ID_KEY = "z_graph.last_project_id";
 const resolveBackendUrl = () => {
   if (API_BASE_URL) return API_BASE_URL;
   if (typeof window !== "undefined") {
@@ -670,7 +670,7 @@ export function TaskStoreProvider({ children }) {
           Object.prototype.hasOwnProperty.call(healthData, "zepConfigured"));
 
       if (!hasExpectedHealthShape) {
-        throw new Error("Health endpoint reachable, but payload is not zep_graph backend");
+        throw new Error("Health endpoint reachable, but payload is not z_graph backend");
       }
 
       let message = "Healthy";

@@ -26,10 +26,9 @@ class Settings(BaseSettings):
     project_storage_connection_string: str | None = None
     postgres_host: str = "localhost"
     postgres_port: int = 5432
-    postgres_db: str = "zep_graph"
-    postgres_user: str = "zep_graph"
+    postgres_db: str = "z_graph"
+    postgres_user: str = "z_graph"
     postgres_password: str = "zep_graph_password"
-    postgres_url: str | None = None
     llm_provider: str = "openai"
     llm_api_key: str | None = None
     llm_base_url: str | None = None
@@ -55,8 +54,6 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        if self.postgres_url:
-            return self.postgres_url
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -101,7 +98,6 @@ class Config:
     POSTGRES_DB = settings.postgres_db
     POSTGRES_USER = settings.postgres_user
     POSTGRES_PASSWORD = settings.postgres_password
-    POSTGRES_URL = settings.postgres_url
     DATABASE_URL = settings.database_url
 
     LLM_PROVIDER = settings.llm_provider

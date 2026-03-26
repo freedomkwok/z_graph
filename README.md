@@ -1,6 +1,6 @@
-# zep_graph
+# z_graph
 
-`zep_graph` is a full-stack document-to-knowledge-graph builder.
+`z_graph` is a full-stack document-to-knowledge-graph builder.
 
 - `frontend`: React + Vite UI for project selection, ontology generation, and graph build monitoring
 - `backend`: FastAPI APIs that extract text, generate ontology with LLM, and build graph data in Zep
@@ -18,7 +18,7 @@
 ## Project structure
 
 ```text
-zep_graph/
+z_graph/
 ├── frontend/                  # React + Vite app (default dev port 5173)
 ├── backend/                   # FastAPI app (default port 8000)
 │   └── app/

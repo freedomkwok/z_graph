@@ -27,7 +27,7 @@ from app.core.service.retrieval import fetch_all_edges, fetch_all_nodes
 from app.core.utils.logger import get_logger
 from app.core.utils.retry import call_with_retry
 
-logger = get_logger("zep_graph.zep_tools")
+logger = get_logger("z_graph.zep_tools")
 
 
 class ZepToolsService:

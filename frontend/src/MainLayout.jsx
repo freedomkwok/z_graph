@@ -21,7 +21,7 @@ export default function MainLayout({ currentPage = "workspace", onNavigate }) {
   const isResizingRef = useRef(false);
   const [isResizing, setIsResizing] = useState(false);
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
-    const saved = Number(window.localStorage.getItem("zep_graph.right_panel_width"));
+    const saved = Number(window.localStorage.getItem("z_graph.right_panel_width"));
     if (Number.isFinite(saved) && saved > 0) {
       return saved;
     }
@@ -74,7 +74,7 @@ export default function MainLayout({ currentPage = "workspace", onNavigate }) {
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem("zep_graph.right_panel_width", String(rightPanelWidth));
+    window.localStorage.setItem("z_graph.right_panel_width", String(rightPanelWidth));
   }, [rightPanelWidth]);
 
   const isBothMode = state.viewMode === "both";

@@ -9,7 +9,7 @@ from zep_cloud import InternalServerError
 from app.core.backend_client_factory.schema import ZepClientAdapter
 from app.core.utils.logger import get_logger
 
-logger = get_logger("zep_graph.retrieval")
+logger = get_logger("z_graph.retrieval")
 
 _DEFAULT_PAGE_SIZE = 100
 _MAX_NODES = 2000

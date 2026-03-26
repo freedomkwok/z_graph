@@ -5,7 +5,7 @@ from app.core.config import Config
 from app.core.backend_client_factory.schema import ZepClientAdapter
 from app.core.backend_client_factory.zep.zep_client import ZepCloudClient
 from app.core.backend_client_factory.graphiti.graphiti_client import GraphitiClient
-logger = logging.getLogger('zep_graph.zep_factory')
+logger = logging.getLogger('z_graph.zep_factory')
 
 
 def create_zep_client(

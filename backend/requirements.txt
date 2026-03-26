@@ -5,6 +5,7 @@ python-dotenv
 pydantic-settings
 httpx
 zep-cloud
+graphiti-core>=0.28.2
 langfuse
 debugpy
 openai

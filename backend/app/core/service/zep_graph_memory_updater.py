@@ -15,7 +15,7 @@ from app.core.config import Config
 from app.core.utils.logger import get_logger
 from app.core.utils.retry import call_with_retry
 
-logger = get_logger("zep_graph.zep_episode_updater")
+logger = get_logger("z_graph.zep_episode_updater")
 
 
 class ZepEpisodeUpdater:

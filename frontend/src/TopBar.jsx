@@ -85,7 +85,7 @@ export default function TopBar({ currentPage = "workspace", onNavigate }) {
 
   return (
     <header className="topbar">
-      <div className="brand">zep_graph</div>
+      <div className="brand">z_graph</div>
 
       <div className="topbar-controls">
         <div className="project-picker">
