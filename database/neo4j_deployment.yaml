@@ -1,8 +1,11 @@
+---
+# Source: neo4j-community/templates/namespace.yaml
 apiVersion: v1
 kind: Namespace
 metadata:
   name: z-graph
 ---
+# Source: neo4j-community/templates/secret.yaml
 apiVersion: v1
 kind: Secret
 metadata:
@@ -10,10 +13,9 @@ metadata:
   namespace: z-graph
 type: Opaque
 stringData:
-  # Format: "<username>/<password>"
-  # Change this before using in shared environments.
-  NEO4J_AUTH: neo4j/password
+  NEO4J_AUTH: "neo4j/password"
 ---
+# Source: neo4j-community/templates/pvc.yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -26,6 +28,7 @@ spec:
     requests:
       storage: 10Gi
 ---
+# Source: neo4j-community/templates/service.yaml
 apiVersion: v1
 kind: Service
 metadata:
@@ -43,6 +46,7 @@ spec:
       targetPort: 7687
   type: ClusterIP
 ---
+# Source: neo4j-community/templates/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -62,7 +66,7 @@ spec:
     spec:
       containers:
         - name: neo4j
-          image: neo4j:5.26-community
+          image: "neo4j:5.26-community"
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -76,7 +80,7 @@ spec:
                   name: neo4j-auth
                   key: NEO4J_AUTH
             - name: NEO4J_PLUGINS
-              value: '["apoc"]'
+              value: "[\"apoc\"]"
             - name: NEO4J_apoc_export_file_enabled
               value: "true"
             - name: NEO4J_apoc_import_file_enabled
@@ -102,12 +106,12 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 6
           resources:
-            requests:
-              cpu: "250m"
-              memory: "1Gi"
             limits:
-              cpu: "1"
-              memory: "2Gi"
+              cpu: 6000m
+              memory: 6Gi
+            requests:
+              cpu: 12000m
+              memory: 12Gi
           volumeMounts:
             - name: neo4j-data
               mountPath: /data

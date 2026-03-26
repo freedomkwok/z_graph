@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.deployment.name }}
+  namespace: {{ include "neo4j-community.namespace" . }}
+spec:
+  replicas: {{ .Values.deployment.replicas }}
+  strategy:
+{{ toYaml .Values.deployment.strategy | indent 4 }}
+  selector:
+    matchLabels:
+      app: {{ .Values.deployment.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.deployment.name }}
+    spec:
+      containers:
+        - name: neo4j
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.httpPort }}
+            - name: bolt
+              containerPort: {{ .Values.service.boltPort }}
+          env:
+            - name: NEO4J_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.secretName }}
+                  key: NEO4J_AUTH
+            - name: NEO4J_PLUGINS
+              value: {{ .Values.env.plugins | quote }}
+            - name: NEO4J_apoc_export_file_enabled
+              value: {{ .Values.env.apocExportFileEnabled | quote }}
+            - name: NEO4J_apoc_import_file_enabled
+              value: {{ .Values.env.apocImportFileEnabled | quote }}
+            - name: NEO4J_apoc_import_file_use__neo4j__config
+              value: {{ .Values.env.apocImportUseNeo4jConfig | quote }}
+            - name: NEO4J_server_bolt_listen__address
+              value: {{ .Values.env.boltListenAddress | quote }}
+            - name: NEO4J_server_http_listen__address
+              value: {{ .Values.env.httpListenAddress | quote }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.service.boltPort }}
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.service.boltPort }}
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+          volumeMounts:
+            - name: neo4j-data
+              mountPath: /data
+      volumes:
+        - name: neo4j-data
+          persistentVolumeClaim:
+            claimName: {{ default "neo4j-data" .Values.persistence.existingClaim }}
