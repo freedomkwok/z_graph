@@ -19,6 +19,7 @@ dependencies = [
     "psycopg[binary]>=3.3.3",
     "pymupdf>=1.27.2.2",
     "graphiti-core>=0.28.2",
+    "zep-cloud>=0.28.2",
 ]
 
 [project.optional-dependencies]

@@ -380,6 +380,7 @@ requires-dist = [
     { name = "tenacity" },
     { name = "uvicorn", extras = ["standard"] },
     { name = "zep-cloud" },
+    { name = "zep-cloud", specifier = ">=0.28.2" },
 ]
 
 [package.metadata.requires-dev]

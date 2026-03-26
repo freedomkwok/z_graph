@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST_PATH="${SCRIPT_DIR}/neo4j.community.k8s.yaml"
-NAMESPACE="zep-graph"
+NAMESPACE="z-graph"
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl not found. Please install kubectl first."
