@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useTaskStore } from "./taskStore";
+import { useTaskStore } from "./TaskStore/index";
 
 function formatProjectLabel(project) {
   const name = String(project?.name ?? "").trim() || "Unnamed Project";

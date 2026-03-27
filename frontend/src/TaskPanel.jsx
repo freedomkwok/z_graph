@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { useTaskStore } from "./taskStore";
+import { useTaskStore } from "./TaskStore/index";
 
 const statusClass = (status) => {
   switch (status) {
@@ -20,45 +20,166 @@ const normalizeTypeTag = (value) =>
     .trim()
     .replace(/\s+/g, " ");
 
-const extractOntologyTypeNames = (project, key) => {
-  const items = Array.isArray(project?.ontology?.[key]) ? project.ontology[key] : [];
-  const names = [];
+const normalizeTypeKey = (value) => normalizeTypeTag(value).toLowerCase();
+
+const clonePlainData = (value) => JSON.parse(JSON.stringify(value ?? {}));
+
+const normalizeStringList = (values) => {
+  const nextValues = [];
   const seen = new Set();
-  for (const item of items) {
-    const normalized = normalizeTypeTag(item?.name);
+  for (const value of Array.isArray(values) ? values : []) {
+    const normalized = String(value ?? "").trim();
     if (!normalized) continue;
     const dedupeKey = normalized.toLowerCase();
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
-    names.push(normalized);
+    nextValues.push(normalized);
   }
-  return names;
+  return nextValues;
 };
 
-function TypeTagEditor({ title, tags, onChange, placeholder, autoFocus = false, highlighted = false }) {
+const createDefaultEntityType = (name) => ({
+  name: normalizeTypeTag(name),
+  description: name ? `A ${name} entity.` : "",
+  attributes: [],
+  examples: [],
+});
+
+const createDefaultRelationshipType = (name) => ({
+  name: normalizeTypeTag(name),
+  description: name ? `A ${name} relationship.` : "",
+  attributes: [],
+  source_targets: [],
+});
+
+const sanitizeEntityTypeDraft = (raw) => {
+  const name = normalizeTypeTag(raw?.name);
+  if (!name) return null;
+  return {
+    ...raw,
+    name,
+    description: String(raw?.description ?? ""),
+    attributes: Array.isArray(raw?.attributes) ? raw.attributes : [],
+    examples: normalizeStringList(raw?.examples),
+  };
+};
+
+const sanitizeRelationshipTypeDraft = (raw) => {
+  const name = normalizeTypeTag(raw?.name);
+  if (!name) return null;
+  return {
+    ...raw,
+    name,
+    description: String(raw?.description ?? ""),
+    attributes: Array.isArray(raw?.attributes) ? raw.attributes : [],
+    source_targets: Array.isArray(raw?.source_targets) ? raw.source_targets : [],
+  };
+};
+
+const extractOntologyTypeDrafts = (project, key, mode) => {
+  const items = Array.isArray(project?.ontology?.[key]) ? project.ontology[key] : [];
+  const seen = new Set();
+  const result = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const normalizedName = normalizeTypeTag(item?.name);
+    if (!normalizedName) continue;
+    const dedupeKey = normalizedName.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    if (mode === "entity") {
+      const draft = sanitizeEntityTypeDraft(item);
+      if (draft) result.push(draft);
+    } else {
+      const draft = sanitizeRelationshipTypeDraft(item);
+      if (draft) result.push(draft);
+    }
+  }
+
+  return result;
+};
+
+const normalizeDraftTypeNames = (values) => {
+  const nextNames = [];
+  const seen = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const normalized = normalizeTypeTag(value);
+    if (!normalized) continue;
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    nextNames.push(normalized);
+  }
+  return nextNames;
+};
+
+const pickDraftDefinitionByName = (definitionsByName, usedIndexes, name) => {
+  const candidates = definitionsByName.get(normalizeTypeKey(name)) ?? [];
+  for (const candidate of candidates) {
+    if (usedIndexes.has(candidate.index)) continue;
+    usedIndexes.add(candidate.index);
+    return candidate;
+  }
+  return null;
+};
+
+const pickDraftDefinitionByIndex = (definitions, usedIndexes, index) => {
+  if (index >= 0 && index < definitions.length && !usedIndexes.has(index)) {
+    usedIndexes.add(index);
+    return { definition: definitions[index], index };
+  }
+  for (let cursor = 0; cursor < definitions.length; cursor += 1) {
+    if (usedIndexes.has(cursor)) continue;
+    usedIndexes.add(cursor);
+    return { definition: definitions[cursor], index: cursor };
+  }
+  return null;
+};
+
+const remapTypeDefinitions = (existingDefinitions, nextNames, mode) => {
+  const definitions = Array.isArray(existingDefinitions) ? existingDefinitions : [];
+  const normalizedNames = normalizeDraftTypeNames(nextNames);
+  const definitionsByName = new Map();
+
+  definitions.forEach((definition, index) => {
+    const key = normalizeTypeKey(definition?.name);
+    if (!key) return;
+    const bucket = definitionsByName.get(key) ?? [];
+    bucket.push({ definition, index });
+    definitionsByName.set(key, bucket);
+  });
+
+  const usedIndexes = new Set();
+  return normalizedNames
+    .map((name, index) => {
+      const source =
+        pickDraftDefinitionByName(definitionsByName, usedIndexes, name) ??
+        pickDraftDefinitionByIndex(definitions, usedIndexes, index);
+      const definition = source?.definition
+        ? { ...source.definition, name }
+        : mode === "entity"
+          ? createDefaultEntityType(name)
+          : createDefaultRelationshipType(name);
+      return mode === "entity"
+        ? sanitizeEntityTypeDraft(definition)
+        : sanitizeRelationshipTypeDraft(definition);
+    })
+    .filter(Boolean);
+};
+
+function TypeTagEditor({ title, tags, onChange, onOpenProperties, placeholder, autoFocus = false, highlighted = false }) {
   const [inputValue, setInputValue] = useState("");
-  const [editingIndex, setEditingIndex] = useState(-1);
-  const [editingValue, setEditingValue] = useState("");
   const addInputRef = useRef(null);
-  const editInputRef = useRef(null);
 
   useEffect(() => {
     if (!autoFocus) return;
     addInputRef.current?.focus();
   }, [autoFocus]);
 
-  useEffect(() => {
-    if (editingIndex < 0) return;
-    editInputRef.current?.focus();
-    editInputRef.current?.select();
-  }, [editingIndex]);
-
-  const hasDuplicate = (nextValue, excludedIndex = -1) =>
-    tags.some(
-      (tag, index) =>
-        index !== excludedIndex &&
-        normalizeTypeTag(tag).toLowerCase() === normalizeTypeTag(nextValue).toLowerCase(),
-    );
+  const hasDuplicate = (nextValue) =>
+    tags.some((tag) => normalizeTypeTag(tag).toLowerCase() === normalizeTypeTag(nextValue).toLowerCase());
 
   const appendTag = () => {
     const normalized = normalizeTypeTag(inputValue);
@@ -74,67 +195,23 @@ function TypeTagEditor({ title, tags, onChange, placeholder, autoFocus = false, 
     onChange(tags.filter((_, index) => index !== targetIndex));
   };
 
-  const beginTagEdit = (targetIndex) => {
-    setEditingIndex(targetIndex);
-    setEditingValue(tags[targetIndex] ?? "");
-  };
-
-  const commitTagEdit = () => {
-    if (editingIndex < 0) return;
-    const normalized = normalizeTypeTag(editingValue);
-    if (!normalized) {
-      removeTagAt(editingIndex);
-    } else if (!hasDuplicate(normalized, editingIndex)) {
-      const nextTags = [...tags];
-      nextTags[editingIndex] = normalized;
-      onChange(nextTags);
-    }
-    setEditingIndex(-1);
-    setEditingValue("");
-  };
-
-  const cancelTagEdit = () => {
-    setEditingIndex(-1);
-    setEditingValue("");
-  };
-
   return (
     <section className={`ontology-editor-section ${highlighted ? "focused" : ""}`}>
       <h4>{title}</h4>
       <div className="ontology-tag-editor-box" onClick={() => addInputRef.current?.focus()}>
-        {tags.map((tag, index) =>
-          editingIndex === index ? (
-            <input
-              key={`${tag}-${index}`}
-              ref={editInputRef}
-              className="ontology-tag-edit-input"
-              value={editingValue}
-              onChange={(event) => setEditingValue(event.target.value)}
-              onBlur={commitTagEdit}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  commitTagEdit();
-                } else if (event.key === "Escape") {
-                  event.preventDefault();
-                  cancelTagEdit();
-                }
-              }}
-            />
-          ) : (
-            <button
-              key={`${tag}-${index}`}
-              className="ontology-tag-chip"
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                beginTagEdit(index);
-              }}
-            >
-              {tag}
-            </button>
-          ),
-        )}
+        {tags.map((tag, index) => (
+          <button
+            key={`${tag}-${index}`}
+            className="ontology-tag-chip"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenProperties(index);
+            }}
+          >
+            {tag}
+          </button>
+        ))}
         <input
           ref={addInputRef}
           className="ontology-tag-input"
@@ -156,8 +233,174 @@ function TypeTagEditor({ title, tags, onChange, placeholder, autoFocus = false, 
         />
       </div>
       <p className="field-note">
-        Click a tag to edit. Press Enter to save. Press Backspace on empty input to remove the last tag.
+        Click a tag to edit full properties. Press Backspace on empty input to remove the last tag.
       </p>
+    </section>
+  );
+}
+
+function EditableStringListEditor({ title, values = [], onChange, placeholder }) {
+  const [inputValue, setInputValue] = useState("");
+  const [editingIndex, setEditingIndex] = useState(-1);
+  const [editingValue, setEditingValue] = useState("");
+  const addInputRef = useRef(null);
+  const editInputRef = useRef(null);
+
+  useEffect(() => {
+    if (editingIndex < 0) return;
+    editInputRef.current?.focus();
+    editInputRef.current?.select();
+  }, [editingIndex]);
+
+  const hasDuplicate = (nextValue, excludedIndex = -1) =>
+    values.some(
+      (item, index) =>
+        index !== excludedIndex &&
+        String(item ?? "").trim().toLowerCase() === String(nextValue ?? "").trim().toLowerCase(),
+    );
+
+  const appendValue = () => {
+    const normalized = String(inputValue ?? "").trim();
+    if (!normalized || hasDuplicate(normalized)) {
+      setInputValue("");
+      return;
+    }
+    onChange([...(Array.isArray(values) ? values : []), normalized]);
+    setInputValue("");
+  };
+
+  const removeValueAt = (targetIndex) => {
+    onChange((Array.isArray(values) ? values : []).filter((_, index) => index !== targetIndex));
+  };
+
+  const beginEdit = (targetIndex) => {
+    setEditingIndex(targetIndex);
+    setEditingValue(values[targetIndex] ?? "");
+  };
+
+  const commitEdit = () => {
+    if (editingIndex < 0) return;
+    const normalized = String(editingValue ?? "").trim();
+    if (!normalized) {
+      removeValueAt(editingIndex);
+    } else if (!hasDuplicate(normalized, editingIndex)) {
+      const nextValues = [...values];
+      nextValues[editingIndex] = normalized;
+      onChange(nextValues);
+    }
+    setEditingIndex(-1);
+    setEditingValue("");
+  };
+
+  return (
+    <section className="ontology-property-section">
+      <h5>{title}</h5>
+      <div className="ontology-string-list" onClick={() => addInputRef.current?.focus()}>
+        {(Array.isArray(values) ? values : []).map((value, index) =>
+          editingIndex === index ? (
+            <input
+              key={`${value}-${index}`}
+              ref={editInputRef}
+              className="ontology-string-edit-input"
+              value={editingValue}
+              onChange={(event) => setEditingValue(event.target.value)}
+              onBlur={commitEdit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commitEdit();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  setEditingIndex(-1);
+                  setEditingValue("");
+                }
+              }}
+            />
+          ) : (
+            <button
+              key={`${value}-${index}`}
+              className="ontology-string-chip"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                beginEdit(index);
+              }}
+            >
+              * {value}
+            </button>
+          ),
+        )}
+        <input
+          ref={addInputRef}
+          className="ontology-string-input"
+          value={inputValue}
+          onChange={(event) => setInputValue(event.target.value)}
+          placeholder={placeholder}
+          onBlur={appendValue}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === ",") {
+              event.preventDefault();
+              appendValue();
+              return;
+            }
+            if (event.key === "Backspace" && !inputValue && values.length > 0) {
+              event.preventDefault();
+              removeValueAt(values.length - 1);
+            }
+          }}
+        />
+      </div>
+    </section>
+  );
+}
+
+function JsonListEditor({ title, values = [], onChange, invalidIndexes = [], addLabel }) {
+  const invalidSet = new Set(Array.isArray(invalidIndexes) ? invalidIndexes : []);
+
+  const updateItem = (index, nextValue) => {
+    const nextValues = [...values];
+    nextValues[index] = nextValue;
+    onChange(nextValues);
+  };
+
+  const removeItem = (index) => {
+    onChange(values.filter((_, cursor) => cursor !== index));
+  };
+
+  const appendItem = () => {
+    onChange([...(Array.isArray(values) ? values : []), "{}"]);
+  };
+
+  return (
+    <section className="ontology-property-section">
+      <h5>{title}</h5>
+      <div className="ontology-json-list">
+        {(Array.isArray(values) ? values : []).map((value, index) => (
+          <div className="ontology-json-item" key={`${title}-${index}`}>
+            <textarea
+              className={`ontology-json-item-input ${invalidSet.has(index) ? "invalid" : ""}`}
+              value={String(value ?? "")}
+              rows={3}
+              onChange={(event) => updateItem(index, event.target.value)}
+            />
+            <div className="ontology-json-item-actions">
+              <button
+                className="ontology-json-remove-btn"
+                type="button"
+                onClick={() => removeItem(index)}
+              >
+                Remove
+              </button>
+            </div>
+            {invalidSet.has(index) && (
+              <p className="ontology-json-item-error">Invalid JSON. Fix this item before confirming.</p>
+            )}
+          </div>
+        ))}
+      </div>
+      <button className="ontology-json-add-btn" type="button" onClick={appendItem}>
+        {addLabel}
+      </button>
     </section>
   );
 }
@@ -181,8 +424,17 @@ export default function TaskPanel() {
   const [activeStepTab, setActiveStepTab] = useState("A");
   const [activeBackendTab, setActiveBackendTab] = useState("build");
   const [ontologyEditorMode, setOntologyEditorMode] = useState("");
-  const [draftEntityTypeNames, setDraftEntityTypeNames] = useState([]);
-  const [draftEdgeTypeNames, setDraftEdgeTypeNames] = useState([]);
+  const [draftEntityTypes, setDraftEntityTypes] = useState([]);
+  const [draftEdgeTypes, setDraftEdgeTypes] = useState([]);
+  const [typePropertyEditor, setTypePropertyEditor] = useState({
+    open: false,
+    mode: "",
+    index: -1,
+    draft: null,
+    jsonTexts: {},
+    invalidJsonIndexes: {},
+    error: "",
+  });
   const [savingOntologyTypes, setSavingOntologyTypes] = useState(false);
   const [ontologyEditorError, setOntologyEditorError] = useState("");
 
@@ -191,10 +443,184 @@ export default function TaskPanel() {
   const isProjectCreated = Boolean(form.projectId);
   const canOpenOntologyEditor = Boolean(form.projectId) && ontologyTask.status !== "running";
   const isEntityEditor = ontologyEditorMode === "entity";
+  const draftEntityTypeNames = draftEntityTypes.map((item) => normalizeTypeTag(item?.name)).filter(Boolean);
+  const draftEdgeTypeNames = draftEdgeTypes.map((item) => normalizeTypeTag(item?.name)).filter(Boolean);
+  const isTypePropertyEditorOpen = Boolean(typePropertyEditor.open);
 
   const handleOntologySubmit = async (event) => {
     event.preventDefault();
     await runOntologyGenerate();
+  };
+
+  const closeTypePropertyEditor = () => {
+    setTypePropertyEditor({
+      open: false,
+      mode: "",
+      index: -1,
+      draft: null,
+      jsonTexts: {},
+      invalidJsonIndexes: {},
+      error: "",
+    });
+  };
+
+  const openTypePropertyEditor = (mode, index) => {
+    const sourceDefinitions = mode === "entity" ? draftEntityTypes : draftEdgeTypes;
+    const source = sourceDefinitions[index];
+    if (!source) return;
+
+    const safeDraft = clonePlainData(source);
+    const toJsonText = (item) => {
+      try {
+        return JSON.stringify(item);
+      } catch {
+        return "{}";
+      }
+    };
+    setTypePropertyEditor({
+      open: true,
+      mode,
+      index,
+      draft: safeDraft,
+      jsonTexts: {
+        attributes: Array.isArray(safeDraft.attributes) ? safeDraft.attributes.map(toJsonText) : [],
+        source_targets:
+          mode === "relationship" && Array.isArray(safeDraft.source_targets)
+            ? safeDraft.source_targets.map(toJsonText)
+            : [],
+      },
+      invalidJsonIndexes: {},
+      error: "",
+    });
+  };
+
+  const updateTypePropertyDraftField = (field, value) => {
+    setTypePropertyEditor((current) => ({
+      ...current,
+      draft: current?.draft ? { ...current.draft, [field]: value } : current.draft,
+      error: "",
+    }));
+  };
+
+  const updateTypePropertyJsonField = (field, values) => {
+    setTypePropertyEditor((current) => ({
+      ...current,
+      jsonTexts: {
+        ...current.jsonTexts,
+        [field]: values,
+      },
+      invalidJsonIndexes: {
+        ...current.invalidJsonIndexes,
+        [field]: [],
+      },
+      error: "",
+    }));
+  };
+
+  const confirmTypePropertyEditor = () => {
+    if (!typePropertyEditor.open || !typePropertyEditor.draft) return;
+
+    const normalizedName = normalizeTypeTag(typePropertyEditor.draft.name);
+    if (!normalizedName) {
+      setTypePropertyEditor((current) => ({
+        ...current,
+        error: "Type name is required.",
+      }));
+      return;
+    }
+
+    const sourceDefinitions =
+      typePropertyEditor.mode === "entity" ? draftEntityTypes : draftEdgeTypes;
+    const hasDuplicateName = sourceDefinitions.some(
+      (item, index) =>
+        index !== typePropertyEditor.index &&
+        normalizeTypeKey(item?.name) === normalizeTypeKey(normalizedName),
+    );
+    if (hasDuplicateName) {
+      setTypePropertyEditor((current) => ({
+        ...current,
+        error: `Type name "${normalizedName}" already exists.`,
+      }));
+      return;
+    }
+
+    const invalidJsonIndexes = {};
+    const parseJsonField = (field) => {
+      const fieldValues = Array.isArray(typePropertyEditor.jsonTexts?.[field])
+        ? typePropertyEditor.jsonTexts[field]
+        : [];
+      const parsedValues = [];
+      const invalidIndexes = [];
+
+      fieldValues.forEach((value, index) => {
+        const normalized = String(value ?? "").trim();
+        if (!normalized) return;
+        try {
+          const parsed = JSON.parse(normalized);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            invalidIndexes.push(index);
+            return;
+          }
+          parsedValues.push(parsed);
+        } catch {
+          invalidIndexes.push(index);
+        }
+      });
+
+      if (invalidIndexes.length > 0) {
+        invalidJsonIndexes[field] = invalidIndexes;
+      }
+      return parsedValues;
+    };
+
+    const parsedAttributes = parseJsonField("attributes");
+    const parsedSourceTargets =
+      typePropertyEditor.mode === "relationship" ? parseJsonField("source_targets") : [];
+
+    if (Object.keys(invalidJsonIndexes).length > 0) {
+      setTypePropertyEditor((current) => ({
+        ...current,
+        invalidJsonIndexes,
+        error: "Fix invalid JSON fields before confirming.",
+      }));
+      return;
+    }
+
+    const nextDraft =
+      typePropertyEditor.mode === "entity"
+        ? sanitizeEntityTypeDraft({
+            ...typePropertyEditor.draft,
+            name: normalizedName,
+            description: String(typePropertyEditor.draft.description ?? ""),
+            examples: normalizeStringList(typePropertyEditor.draft.examples),
+            attributes: parsedAttributes,
+          })
+        : sanitizeRelationshipTypeDraft({
+            ...typePropertyEditor.draft,
+            name: normalizedName,
+            description: String(typePropertyEditor.draft.description ?? ""),
+            attributes: parsedAttributes,
+            source_targets: parsedSourceTargets,
+          });
+
+    if (!nextDraft) {
+      setTypePropertyEditor((current) => ({
+        ...current,
+        error: "Type draft is invalid.",
+      }));
+      return;
+    }
+
+    if (typePropertyEditor.mode === "entity") {
+      setDraftEntityTypes((current) =>
+        current.map((item, index) => (index === typePropertyEditor.index ? nextDraft : item)),
+      );
+    } else {
+      setDraftEdgeTypes((current) =>
+        current.map((item, index) => (index === typePropertyEditor.index ? nextDraft : item)),
+      );
+    }
+    closeTypePropertyEditor();
   };
 
   const openOntologyEditor = (mode) => {
@@ -203,15 +629,17 @@ export default function TaskPanel() {
       return;
     }
     setOntologyEditorMode(mode);
-    setDraftEntityTypeNames(extractOntologyTypeNames(currentProject, "entity_types"));
-    setDraftEdgeTypeNames(extractOntologyTypeNames(currentProject, "edge_types"));
+    setDraftEntityTypes(extractOntologyTypeDrafts(currentProject, "entity_types", "entity"));
+    setDraftEdgeTypes(extractOntologyTypeDrafts(currentProject, "edge_types", "relationship"));
     setOntologyEditorError("");
+    closeTypePropertyEditor();
   };
 
   const closeOntologyEditor = () => {
     if (savingOntologyTypes) return;
     setOntologyEditorMode("");
     setOntologyEditorError("");
+    closeTypePropertyEditor();
   };
 
   const confirmOntologyEditor = async () => {
@@ -227,8 +655,11 @@ export default function TaskPanel() {
       await updateProjectOntologyTypes(normalizedProjectId, {
         entityTypeNames: draftEntityTypeNames,
         edgeTypeNames: draftEdgeTypeNames,
+        entityTypes: draftEntityTypes,
+        edgeTypes: draftEdgeTypes,
       });
       setOntologyEditorMode("");
+      closeTypePropertyEditor();
     } catch (error) {
       const message = String(error);
       setOntologyEditorError(message);
@@ -236,6 +667,14 @@ export default function TaskPanel() {
     } finally {
       setSavingOntologyTypes(false);
     }
+  };
+
+  const handleEntityTagNamesChange = (nextNames) => {
+    setDraftEntityTypes((current) => remapTypeDefinitions(current, nextNames, "entity"));
+  };
+
+  const handleRelationshipTagNamesChange = (nextNames) => {
+    setDraftEdgeTypes((current) => remapTypeDefinitions(current, nextNames, "relationship"));
   };
 
   const handleOntologyStatBoxKeyDown = (event, section) => {
@@ -262,6 +701,14 @@ export default function TaskPanel() {
       setActiveStepTab("A");
     }
   }, [activeStepTab, stepBUnlocked]);
+
+  const typePropertyDraft = typePropertyEditor.draft ?? {};
+  const typePropertyModeLabel =
+    typePropertyEditor.mode === "entity" ? "Entity Type Properties" : "Relationship Type Properties";
+  const typePropertyDescription =
+    typePropertyEditor.mode === "entity"
+      ? "Edit name, description, metadata string list, and attribute JSON payloads."
+      : "Edit name, description, attribute JSON payloads, and source-target JSON payloads.";
 
   return (
     <section className="right-panel">
@@ -554,10 +1001,9 @@ export default function TaskPanel() {
       </div>
 
       {Boolean(ontologyEditorMode) && (
-        <div className="ontology-editor-overlay" onClick={closeOntologyEditor}>
+        <div className="ontology-editor-overlay">
           <article
             className="ontology-editor-panel"
-            onClick={(event) => event.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-label={isEntityEditor ? "Entity type editor" : "Relationship type editor"}
@@ -576,15 +1022,16 @@ export default function TaskPanel() {
             </div>
             <p className="ontology-editor-note">
               {isEntityEditor
-                ? "Update entity type names. Existing entity metadata (description, attributes, examples) is preserved for renamed entries."
-                : "Update relationship type names. Existing relationship metadata (source-target pairs and attributes) is preserved for renamed entries."}
+                ? "Update entity type names. Use tag click to open the full property editor."
+                : "Update relationship type names. Use tag click to open the full property editor."}
             </p>
             <div className="ontology-editor-section-list">
               {isEntityEditor ? (
                 <TypeTagEditor
                   title="Entity Types"
                   tags={draftEntityTypeNames}
-                  onChange={setDraftEntityTypeNames}
+                  onChange={handleEntityTagNamesChange}
+                  onOpenProperties={(index) => openTypePropertyEditor("entity", index)}
                   placeholder="Add entity type and press Enter"
                   autoFocus
                   highlighted
@@ -593,7 +1040,8 @@ export default function TaskPanel() {
                 <TypeTagEditor
                   title="Relationship Types"
                   tags={draftEdgeTypeNames}
-                  onChange={setDraftEdgeTypeNames}
+                  onChange={handleRelationshipTagNamesChange}
+                  onOpenProperties={(index) => openTypePropertyEditor("relationship", index)}
                   placeholder="Add relationship type and press Enter"
                   autoFocus
                   highlighted
@@ -610,8 +1058,104 @@ export default function TaskPanel() {
               >
                 Cancel
               </button>
-              <button className="action-btn" type="button" onClick={confirmOntologyEditor} disabled={savingOntologyTypes}>
+              <button
+                className="action-btn"
+                type="button"
+                onClick={confirmOntologyEditor}
+                disabled={savingOntologyTypes || isTypePropertyEditorOpen}
+              >
                 {savingOntologyTypes ? "Saving..." : "Confirm"}
+              </button>
+            </div>
+          </article>
+        </div>
+      )}
+
+      {isTypePropertyEditorOpen && (
+        <div className="ontology-property-overlay">
+          <article
+            className="ontology-property-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label={typePropertyModeLabel}
+          >
+            <div className="ontology-property-head">
+              <button className="ontology-tag-back-btn" type="button" onClick={closeTypePropertyEditor}>
+                ← Back
+              </button>
+              <h3>{typePropertyModeLabel}</h3>
+              <button
+                className="ontology-editor-close"
+                type="button"
+                onClick={closeTypePropertyEditor}
+                aria-label="Close type property editor"
+              >
+                ×
+              </button>
+            </div>
+            <p className="ontology-editor-note">{typePropertyDescription}</p>
+            <div className="ontology-property-body ontology-property-grid">
+              <div className="ontology-property-col">
+                <div className="ontology-inline-field">
+                  <span className="ontology-inline-label">Type Name:</span>
+                  <input
+                    value={String(typePropertyDraft.name ?? "")}
+                    onChange={(event) => updateTypePropertyDraftField("name", event.target.value)}
+                    placeholder="Type name"
+                  />
+                </div>
+
+                <label className="field">
+                  <span>Description</span>
+                  <textarea
+                    value={String(typePropertyDraft.description ?? "")}
+                    onChange={(event) => updateTypePropertyDraftField("description", event.target.value)}
+                    rows={3}
+                    placeholder="Type description"
+                  />
+                </label>
+
+                {typePropertyEditor.mode === "entity" && (
+                  <EditableStringListEditor
+                    title="Metadata (String List)"
+                    values={Array.isArray(typePropertyDraft.examples) ? typePropertyDraft.examples : []}
+                    onChange={(nextValues) => updateTypePropertyDraftField("examples", nextValues)}
+                    placeholder="Add metadata item and press Enter"
+                  />
+                )}
+              </div>
+
+              <div className="ontology-property-col">
+                <JsonListEditor
+                  title="Attributes (JSON List)"
+                  values={Array.isArray(typePropertyEditor.jsonTexts?.attributes) ? typePropertyEditor.jsonTexts.attributes : []}
+                  onChange={(nextValues) => updateTypePropertyJsonField("attributes", nextValues)}
+                  invalidIndexes={typePropertyEditor.invalidJsonIndexes?.attributes ?? []}
+                  addLabel="Add attribute JSON"
+                />
+
+                {typePropertyEditor.mode === "relationship" && (
+                  <JsonListEditor
+                    title="Source Targets (JSON List)"
+                    values={
+                      Array.isArray(typePropertyEditor.jsonTexts?.source_targets)
+                        ? typePropertyEditor.jsonTexts.source_targets
+                        : []
+                    }
+                    onChange={(nextValues) => updateTypePropertyJsonField("source_targets", nextValues)}
+                    invalidIndexes={typePropertyEditor.invalidJsonIndexes?.source_targets ?? []}
+                    addLabel="Add source-target JSON"
+                  />
+                )}
+              </div>
+            </div>
+            {typePropertyEditor.error && <p className="ontology-editor-error">{typePropertyEditor.error}</p>}
+            <div className="ontology-editor-actions">
+              <button className="ontology-editor-cancel-btn" type="button" onClick={closeTypePropertyEditor}>
+                Cancel
+              </button>
+              <button className="action-btn" type="button" onClick={confirmTypePropertyEditor}>
+                Confirm
               </button>
             </div>
           </article>

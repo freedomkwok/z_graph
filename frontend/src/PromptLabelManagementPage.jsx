@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import TopBar from "./TopBar";
-import { useTaskStore } from "./taskStore";
+import { useTaskStore } from "./TaskStore/index";
 
 export default function PromptLabelManagementPage({ onNavigate }) {
   const { state, fetchPromptLabels, createPromptLabel, deletePromptLabel, syncPromptLabelFromLangfuse } =

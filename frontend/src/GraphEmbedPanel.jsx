@@ -4,7 +4,7 @@ import * as d3 from "d3";
 
 import GraphDetailPanel from "./GraphDetailPanel";
 import GraphInspectorPanel from "./GraphInspectorPanel";
-import { useTaskStore } from "./taskStore";
+import { useTaskStore } from "./TaskStore/index";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 const ZEP_EMBED_URL = import.meta.env.VITE_ZEP_EMBED_URL ?? "https://app.getzep.com";

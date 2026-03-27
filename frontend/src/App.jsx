@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import MainLayout from "./MainLayout";
 import PromptLabelManagementPage from "./PromptLabelManagementPage";
 import ProjectManagementPage from "./ProjectManagementPage";
-import { TaskStoreProvider } from "./taskStore";
+import { TaskStoreProvider } from "./TaskStore/index";
 
 function getPageFromPath(pathname) {
   const normalized = String(pathname ?? "/").toLowerCase();

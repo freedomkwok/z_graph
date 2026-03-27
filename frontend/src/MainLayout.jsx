@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import GraphEmbedPanel from "./GraphEmbedPanel";
 import TaskPanel from "./TaskPanel";
 import TopBar from "./TopBar";
-import { useTaskStore } from "./taskStore";
+import { useTaskStore } from "./TaskStore/index";
 
 const DEFAULT_RIGHT_PANEL_WIDTH = 440;
 const MIN_RIGHT_PANEL_WIDTH = 320;

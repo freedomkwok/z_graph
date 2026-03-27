@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import TopBar from "./TopBar";
-import { useTaskStore } from "./taskStore";
+import { useTaskStore } from "./TaskStore/index";
 
 function formatProjectShortId(projectId) {
   const normalized = String(projectId ?? "").trim();
