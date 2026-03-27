@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from app.core.config import settings as core_settings
 
 logger = logging.getLogger("uvicorn.error")
+_PRODUCTION_LABEL = "production"
 
 
 def _setting(name: str, default: Any) -> Any:
@@ -28,6 +29,50 @@ def _normalize_label(value: str | None) -> str | None:
         return None
     normalized = value.strip().lower()
     return normalized or None
+
+
+def _normalize_prompt_name(value: str) -> str:
+    return str(value or "").strip().strip("/")
+
+
+def _build_labeled_prompt_name(prompt_name: str, label: str | None) -> str | None:
+    normalized_label = _normalize_label(label)
+    if not normalized_label:
+        return None
+
+    normalized_prompt_name = _normalize_prompt_name(prompt_name)
+    parts = [part for part in normalized_prompt_name.split("/") if part]
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return f"{normalized_label}/{parts[0]}"
+
+    category = parts[0]
+    if category not in {"prompts", "sub_queries", "fallback_entites"}:
+        return None
+
+    file_name = parts[-1]
+    return f"{category}/{normalized_label}/{file_name}"
+
+
+def _build_label_fallback_candidates(
+    requested_label: str | None,
+    default_label: str | None = None,
+) -> list[str | None]:
+    candidates: list[str | None] = []
+
+    def add_candidate(value: str | None) -> None:
+        normalized = _normalize_label(value)
+        if normalized not in candidates:
+            candidates.append(normalized)
+
+    if requested_label is not None:
+        add_candidate(requested_label)
+    add_candidate(_PRODUCTION_LABEL)
+    add_candidate(default_label)
+    if None not in candidates:
+        candidates.append(None)
+    return candidates
 
 
 def is_prompt_versioning() -> bool:
@@ -82,11 +127,30 @@ class FilePromptProvider(PromptProvider):
         self.prompt_dir = Path(prompt_dir)
 
     @lru_cache(maxsize=256)
-    def _load_raw(self, name: str) -> str:
-        path = self.prompt_dir / name
+    def _load_raw_by_path(self, relative_path: str) -> str:
+        path = self.prompt_dir / relative_path
         if not path.exists():
             raise FileNotFoundError(f"Prompt template not found: {path.as_posix()}")
         return path.read_text(encoding="utf-8")
+
+    @staticmethod
+    def _build_local_path_candidates(name: str, label: str | None) -> list[str]:
+        candidates: list[str] = []
+
+        def add_candidate(value: str | None) -> None:
+            normalized = _normalize_prompt_name(value or "")
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+
+        normalized_name = _normalize_prompt_name(name)
+        if not normalized_name:
+            return []
+
+        for label_candidate in _build_label_fallback_candidates(label):
+            add_candidate(_build_labeled_prompt_name(normalized_name, label_candidate))
+
+        add_candidate(normalized_name)
+        return candidates
 
     def get(
         self,
@@ -96,9 +160,19 @@ class FilePromptProvider(PromptProvider):
         version: int | None = None,
         **vars: Any,
     ) -> str:
-        del label, version
-        template = self._load_raw(name)
-        return self._render_template(template, vars)
+        del version
+        last_exc: FileNotFoundError | None = None
+        for relative_path in self._build_local_path_candidates(name, label):
+            try:
+                template = self._load_raw_by_path(relative_path)
+                return self._render_template(template, vars)
+            except FileNotFoundError as exc:
+                last_exc = exc
+                continue
+
+        if last_exc is not None:
+            raise last_exc
+        raise FileNotFoundError(f"Prompt template not found: {name}")
 
     @staticmethod
     def _render_template(template: str, vars: dict[str, Any]) -> str:
@@ -184,27 +258,42 @@ class LangfusePromptProvider(PromptProvider):
         return rendered
 
     @staticmethod
-    def _build_prompt_name_candidates(prompt_name: str) -> list[str]:
+    def _build_prompt_name_candidates(prompt_name: str, label: str | None) -> list[str]:
         candidates: list[str] = []
 
         def add_candidate(value: str) -> None:
-            normalized = value.strip("/")
+            normalized = _normalize_prompt_name(value)
             if normalized and normalized not in candidates:
                 candidates.append(normalized)
+
+        normalized_prompt_name = _normalize_prompt_name(prompt_name)
+        if not normalized_prompt_name:
+            return []
+
+        if "/" in normalized_prompt_name:
+            for label_candidate in _build_label_fallback_candidates(label):
+                labeled_candidate = _build_labeled_prompt_name(normalized_prompt_name, label_candidate)
+                if labeled_candidate:
+                    add_candidate(labeled_candidate)
+
+        add_candidate(normalized_prompt_name)
 
         add_candidate(prompt_name)
 
         # Support folder-structured names synced from langfuse_versioning.
-        if "/" not in prompt_name:
-            add_candidate(f"prompts/{prompt_name}")
-            add_candidate(f"sub_queries/{prompt_name}")
-            add_candidate(f"fallback_entities/{prompt_name}")
-            add_candidate(f"fallback_entites/{prompt_name}")
-
-        if prompt_name.startswith("fallback_entites/"):
-            add_candidate(prompt_name.replace("fallback_entites/", "fallback_entities/", 1))
-        if prompt_name.startswith("fallback_entities/"):
-            add_candidate(prompt_name.replace("fallback_entities/", "fallback_entites/", 1))
+        if "/" not in normalized_prompt_name:
+            root_candidates = (
+                "prompts",
+                "sub_queries",
+                "fallback_entites",
+            )
+            for root in root_candidates:
+                root_path = f"{root}/{normalized_prompt_name}"
+                add_candidate(root_path)
+                for label_candidate in _build_label_fallback_candidates(label):
+                    labeled_root_path = _build_labeled_prompt_name(root_path, label_candidate)
+                    if labeled_root_path:
+                        add_candidate(labeled_root_path)
 
         return candidates
 
@@ -217,7 +306,7 @@ class LangfusePromptProvider(PromptProvider):
         vars: dict[str, Any],
     ) -> str:
         last_exc: Exception | None = None
-        for candidate in self._build_prompt_name_candidates(prompt_name):
+        for candidate in self._build_prompt_name_candidates(prompt_name, label):
             try:
                 prompt = self.client.get_prompt(
                     candidate,
@@ -251,18 +340,10 @@ class FallbackPromptProvider(PromptProvider):
     ) -> str:
         requested_label = _normalize_label(label)
         default_label = _normalize_label(_setting("prompt_label", "production"))
-        label_candidates: list[str | None] = []
-
-        def add_candidate(candidate: str | None) -> None:
-            if candidate not in label_candidates:
-                label_candidates.append(candidate)
-
-        if requested_label is not None:
-            add_candidate(requested_label)
-        if default_label is not None:
-            add_candidate(default_label)
-        if not label_candidates:
-            add_candidate(None)
+        label_candidates = _build_label_fallback_candidates(
+            requested_label=requested_label,
+            default_label=default_label,
+        )
 
         last_exc: Exception | None = None
         for candidate in label_candidates:
@@ -278,8 +359,7 @@ class FallbackPromptProvider(PromptProvider):
             ",".join(str(item) for item in label_candidates),
             str(last_exc),
         )
-        fallback_label = label_candidates[-1]
-        return self.fallback.get(name, label=fallback_label, version=version, **vars)
+        return self.fallback.get(name, label=_PRODUCTION_LABEL, version=version, **vars)
 
 
 def _build_prompt_cache_key(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -231,7 +232,60 @@ def ensure_prompt_label_data(
                 """,
                 (name, now_iso, now_iso),
             )
+            _refresh_prompt_label_stats(cur, now_iso)
         conn.commit()
+
+
+def _refresh_prompt_label_stats(cur: Any, now_iso: str) -> int:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS prompt_label_stats (
+            stats_key TEXT PRIMARY KEY,
+            total_labels INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute("SELECT COUNT(*)::INT FROM prompt_labels")
+    total_labels = int((cur.fetchone() or [0])[0] or 0)
+    cur.execute(
+        """
+        INSERT INTO prompt_label_stats (stats_key, total_labels, updated_at)
+        VALUES ('global', %s, %s)
+        ON CONFLICT (stats_key)
+        DO UPDATE SET
+            total_labels = EXCLUDED.total_labels,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (total_labels, now_iso),
+    )
+    return total_labels
+
+
+def get_prompt_label_stats_data(connection_string: str) -> dict[str, Any]:
+    with _connect_postgres(connection_string) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT total_labels, updated_at
+                FROM prompt_label_stats
+                WHERE stats_key = 'global'
+                """
+            )
+            row = cur.fetchone()
+            if row is None:
+                now_iso = datetime.now().isoformat()
+                total_labels = _refresh_prompt_label_stats(cur, now_iso)
+                conn.commit()
+                return {
+                    "total_labels": total_labels,
+                    "updated_at": now_iso,
+                }
+
+    return {
+        "total_labels": int(row[0] or 0),
+        "updated_at": str(row[1] or ""),
+    }
 
 
 def list_prompt_labels_data(connection_string: str) -> list[dict[str, Any]]:
@@ -283,6 +337,8 @@ def delete_prompt_label_data(connection_string: str, name: str) -> tuple[bool, s
                 (name,),
             )
             deleted = cur.rowcount > 0
+            if deleted:
+                _refresh_prompt_label_stats(cur, now_iso=datetime.now().isoformat())
         conn.commit()
 
     if deleted:

@@ -22,8 +22,8 @@ class OntologyGenerator:
     DEFAULT_PROMPT_LABEL = "Production"
     USER_EXTRACTION_PROMPT_NAME = "prompts/USER_EXTRACTION_PROMPT.md"
     ONTOLOGY_SYSTEM_PROMPT_NAME = "prompts/ONTOLOGY_SYSTEM_PROMPT.md"
-    PERSON_FALLBACK_NAME = "fallback_entities/person.json"
-    ORGANIZATION_FALLBACK_NAME = "fallback_entities/organization.json"
+    PERSON_FALLBACK_NAME = "fallback_entites/person.json"
+    ORGANIZATION_FALLBACK_NAME = "fallback_entites/organization.json"
     _PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
 
     def __init__(
@@ -38,7 +38,7 @@ class OntologyGenerator:
             base_url=Config.LLM_BASE_URL,
         )
         base_dir = Path(__file__).resolve().parent.parent / "langfuse_versioning"
-        # Unified root so keys like prompts/* and fallback_entities/* resolve identically
+        # Unified root so keys like prompts/* and fallback_entites/* resolve identically
         # for both Langfuse and local file fallback.
         self.prompt_provider = prompt_provider or make_prompt_provider(prompts_dir=base_dir)
         self.fallback_entity_provider = fallback_entity_provider or make_prompt_provider(

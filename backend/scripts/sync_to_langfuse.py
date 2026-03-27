@@ -18,11 +18,10 @@ DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCES = (
     "app/core/langfuse_versioning/prompts",
     "app/core/langfuse_versioning/sub_queries",
-    # Support current folder name and corrected spelling.
     "app/core/langfuse_versioning/fallback_entites",
-    "app/core/langfuse_versioning/fallback_entities",
 )
 LANGFUSE_PROMPT_REF_RE = re.compile(r"@@@langfusePrompt:([^@]+)@@@")
+LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
 
 def parse_args() -> argparse.Namespace:
@@ -97,6 +96,31 @@ def normalize_label(label: str) -> str:
     return label.strip().lower()
 
 
+def _merge_labels(*label_groups: Iterable[str]) -> list[str]:
+    merged: list[str] = []
+    for group in label_groups:
+        for label in group:
+            normalized = normalize_label(str(label or ""))
+            if normalized and normalized not in merged:
+                merged.append(normalized)
+    return merged
+
+
+def _infer_labels_from_file_path(relative_file_path: Path, sources: Iterable[str]) -> list[str]:
+    structured_name = _structured_prompt_name(relative_file_path, sources)
+    parts = [part for part in structured_name.split("/") if part]
+    if len(parts) < 3:
+        return []
+
+    root_category = parts[0]
+    label_candidate = normalize_label(parts[1])
+    if root_category not in {"prompts", "sub_queries", "fallback_entites"}:
+        return []
+    if not LABEL_PATTERN.fullmatch(label_candidate):
+        return []
+    return [label_candidate]
+
+
 def _normalize_source_prefixes(sources: Iterable[str]) -> list[str]:
     prefixes: list[str] = []
     for source in sources:
@@ -107,8 +131,7 @@ def _normalize_source_prefixes(sources: Iterable[str]) -> list[str]:
 
 
 def _normalize_folder_aliases(name: str) -> str:
-    # Normalize historical typo to stable server-side path.
-    return name.replace("fallback_entites/", "fallback_entities/")
+    return name
 
 
 def _structured_prompt_name(relative_file_path: Path, sources: Iterable[str]) -> str:
@@ -209,10 +232,6 @@ def order_prompt_files_by_dependency(
         alias_map[structured] = canonical
         alias_map[flat_alias] = canonical
         alias_map[legacy_alias] = canonical
-
-        # Accept both folder spellings during dependency resolution.
-        if "fallback_entities/" in structured:
-            alias_map[structured.replace("fallback_entities/", "fallback_entites/")] = canonical
 
     missing_refs: set[str] = set()
     # Read dependencies and resolve aliases.
@@ -365,7 +384,10 @@ def main() -> int:
         for file_path in prompt_files:
             rel = file_path.relative_to(repo_root)
             name = normalize_prompt_name(rel, args.name_prefix, sources)
-            print(f"[DRY-RUN] {rel.as_posix()} -> {name}")
+            inferred_labels = _infer_labels_from_file_path(rel, sources)
+            final_labels = _merge_labels(inferred_labels, labels)
+            labels_repr = ",".join(final_labels) if final_labels else "-"
+            print(f"[DRY-RUN] {rel.as_posix()} -> {name} [labels={labels_repr}]")
             if args.clean:
                 print(f"[DRY-RUN] delete all versions -> {name}")
         return 0
@@ -405,11 +427,13 @@ def main() -> int:
             rel = file_path.relative_to(repo_root)
             prompt_name = normalize_prompt_name(rel, args.name_prefix, sources)
             content = file_path.read_text(encoding="utf-8")
+            inferred_labels = _infer_labels_from_file_path(rel, sources)
+            final_labels = _merge_labels(inferred_labels, labels)
 
             payload = build_payload(
                 name=prompt_name,
                 content=content,
-                labels=labels,
+                labels=final_labels,
                 source_path=rel.as_posix(),
             )
 

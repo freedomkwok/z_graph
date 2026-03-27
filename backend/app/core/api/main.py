@@ -90,10 +90,14 @@ def list_projects(limit: int = Query(default=50, ge=1, le=500)) -> dict[str, Any
 @router.get("/prompt-label/list")
 def list_prompt_labels() -> dict[str, Any]:
     labels = PromptLabelManager.list_labels()
+    label_stats = PromptLabelManager.get_label_stats()
+    total_labels = int(label_stats.get("total_labels") or len(labels))
     return {
         "success": True,
         "data": labels,
         "count": len(labels),
+        "total_labels": total_labels,
+        "stats": label_stats,
     }
 
 
@@ -120,6 +124,20 @@ def delete_prompt_label(label_name: str) -> Any:
         "success": True,
         "message": message,
     }
+
+
+@router.post("/prompt-label/{label_name}/sync-from-langfuse")
+def sync_prompt_label_from_langfuse(label_name: str) -> Any:
+    try:
+        result = PromptLabelManager.sync_label_from_langfuse(label_name)
+        return {
+            "success": True,
+            "message": f"Prompt label synced from Langfuse: {result.get('requested_label')}",
+            "data": result,
+        }
+    except Exception as exc:
+        logger.exception("Prompt label sync from Langfuse failed")
+        return _error_response(500, str(exc), exc)
 
 
 @router.get("/project/{project_id}")

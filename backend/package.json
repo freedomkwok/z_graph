@@ -8,6 +8,7 @@
     "build": "uv venv --python 3.11 && UV_NO_PROGRESS=1 uv sync -v",
     "build:graphiti": "uv venv --python 3.11 && UV_NO_PROGRESS=1 uv sync -v --extra graphiti",
     "sync:langfuse": "uv run python scripts/sync_to_langfuse.py --repo-root .",
+    "sync:langfuse:pull": "uv run python scripts/sync_from_langfuse.py --repo-root .",
     "clean:langfuse:prompts": "uv run python scripts/clean_langfuse_prompts.py --repo-root .",
     "lint": "uv run ruff check .",
     "lint:fix": "uv run ruff check . --fix",

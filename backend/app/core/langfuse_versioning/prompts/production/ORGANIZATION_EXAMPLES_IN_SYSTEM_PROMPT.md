@@ -1,0 +1,7 @@
+- University: university
+- Company: company/business
+- GovernmentAgency: government agency
+- MediaOutlet: media outlet
+- Hospital: hospital
+- School: primary/secondary school
+- NGO: non-governmental organization

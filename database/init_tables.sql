@@ -5,6 +5,12 @@ CREATE TABLE IF NOT EXISTS prompt_labels (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS prompt_label_stats (
+    stats_key TEXT PRIMARY KEY,
+    total_labels INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS projects (
     project_id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
@@ -39,6 +45,20 @@ VALUES (
         NOW()::TEXT
     )
 ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO
+    prompt_label_stats (stats_key, total_labels, updated_at)
+VALUES (
+        'global',
+        (
+            SELECT COUNT(*)::INT
+            FROM prompt_labels
+        ),
+        NOW()::TEXT
+    )
+ON CONFLICT (stats_key) DO UPDATE SET
+    total_labels = EXCLUDED.total_labels,
+    updated_at = EXCLUDED.updated_at;
 
 UPDATE projects
 SET
