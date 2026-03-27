@@ -1,1 +1,0 @@
-- Person: any individual human

@@ -13,7 +13,6 @@ from app.core.utils.db_query import (
     get_project_data,
     get_project_extracted_text,
     list_projects_data,
-    update_project_extracted_text,
     upsert_project,
 )
 
@@ -45,6 +44,12 @@ class ProjectManager:
         return os.path.join(cls._get_project_dir(project_id), "extracted_text.txt")
 
     @classmethod
+    def _delete_project_dir(cls, project_id: str) -> None:
+        project_dir = cls._get_project_dir(project_id)
+        if os.path.exists(project_dir):
+            shutil.rmtree(project_dir)
+
+    @classmethod
     def _use_postgres_storage(cls) -> bool:
         return str(Config.STORAGE).strip().lower() in cls._POSTGRES_STORAGE_VALUES
 
@@ -74,7 +79,7 @@ class ProjectManager:
             cls._ensure_projects_dir()
 
     @classmethod
-    def create_project(cls, name: str = "Unnamed Project") -> Project:
+    def create_project(cls, name: str = "Unnamed Project", *, persist: bool = True) -> Project:
         cls.initialize_storage()
 
         project_id = f"proj_{uuid.uuid4().hex[:12]}"
@@ -93,7 +98,8 @@ class ProjectManager:
         os.makedirs(project_dir, exist_ok=True)
         os.makedirs(files_dir, exist_ok=True)
 
-        cls.save_project(project)
+        if persist:
+            cls.save_project(project)
 
         return project
 
@@ -162,17 +168,13 @@ class ProjectManager:
         if cls._use_postgres_storage():
             cls._ensure_postgres_storage()
             deleted = delete_project_data(cls._get_storage_connection_string(), project_id)
-
-            project_dir = cls._get_project_dir(project_id)
-            if os.path.exists(project_dir):
-                shutil.rmtree(project_dir)
+            cls._delete_project_dir(project_id)
             return deleted
 
-        project_dir = cls._get_project_dir(project_id)
-        if not os.path.exists(project_dir):
+        if not os.path.exists(cls._get_project_dir(project_id)):
             return False
 
-        shutil.rmtree(project_dir)
+        cls._delete_project_dir(project_id)
         return True
 
     @classmethod
@@ -202,31 +204,23 @@ class ProjectManager:
 
     @classmethod
     def save_extracted_text(cls, project_id: str, text: str) -> None:
-        if cls._use_postgres_storage():
-            cls._ensure_postgres_storage()
-            now = datetime.now().isoformat()
-            update_project_extracted_text(
-                cls._get_storage_connection_string(), project_id=project_id, text=text, updated_at=now
-            )
-            return
-
         text_path = cls._get_project_text_path(project_id)
         with open(text_path, "w", encoding="utf-8") as f:
             f.write(text)
 
     @classmethod
     def get_extracted_text(cls, project_id: str) -> str | None:
+        text_path = cls._get_project_text_path(project_id)
+
+        if os.path.exists(text_path):
+            with open(text_path, encoding="utf-8") as f:
+                return f.read()
+
         if cls._use_postgres_storage():
             cls._ensure_postgres_storage()
             return get_project_extracted_text(cls._get_storage_connection_string(), project_id)
 
-        text_path = cls._get_project_text_path(project_id)
-
-        if not os.path.exists(text_path):
-            return None
-
-        with open(text_path, encoding="utf-8") as f:
-            return f.read()
+        return None
 
     @classmethod
     def get_project_files(cls, project_id: str) -> list[str]:

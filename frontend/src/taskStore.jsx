@@ -70,6 +70,8 @@ function getPreferredPromptLabel(catalogItems, desiredLabel) {
 const initialOntologyTask = {
   status: "idle",
   message: "Waiting",
+  progress: 0,
+  taskId: "",
   entityTypes: 0,
   edgeTypes: 0,
 };
@@ -92,6 +94,7 @@ const initialState = {
     url: BACKEND_DISPLAY_URL,
     environment: "-",
     zepConfigured: false,
+    latencyMs: null,
     message: "Not checked",
   },
   iframeVersion: 0,
@@ -162,6 +165,7 @@ function getOntologyTaskFromProject(project) {
 
   if (project?.status === "failed" && !hasOntology) {
     return {
+      ...initialOntologyTask,
       status: "error",
       message: project?.error ?? "Ontology generation failed",
       entityTypes,
@@ -171,19 +175,16 @@ function getOntologyTaskFromProject(project) {
 
   if (hasOntology || project?.status !== "created") {
     return {
+      ...initialOntologyTask,
       status: "success",
       message: "Ontology ready",
+      progress: 100,
       entityTypes,
       edgeTypes,
     };
   }
 
-  return {
-    status: "idle",
-    message: "Waiting",
-    entityTypes: 0,
-    edgeTypes: 0,
-  };
+  return initialOntologyTask;
 }
 
 function getGraphTaskFromProject(project) {
@@ -312,7 +313,8 @@ const TaskStoreContext = createContext(null);
 
 export function TaskStoreProvider({ children }) {
   const [state, dispatch] = useReducer(taskReducer, initialState);
-  const lastPolledTaskMessageRef = useRef("");
+  const lastOntologyTaskMessageRef = useRef("");
+  const lastGraphTaskMessageRef = useRef("");
 
   const addSystemLog = (message) => {
     if (!message) return;
@@ -425,7 +427,8 @@ export function TaskStoreProvider({ children }) {
         chunkSize: 500,
         chunkOverlap: 50,
       });
-      lastPolledTaskMessageRef.current = "";
+      lastOntologyTaskMessageRef.current = "";
+      lastGraphTaskMessageRef.current = "";
       addSystemLog("No project selected.");
       return;
     }
@@ -489,7 +492,8 @@ export function TaskStoreProvider({ children }) {
         type: "SET_GRAPH_TASK",
         payload: nextGraphTask,
       });
-      lastPolledTaskMessageRef.current = "";
+      lastOntologyTaskMessageRef.current = "";
+      lastGraphTaskMessageRef.current = "";
       addSystemLog(
         `Project loaded: ${hydratedProject.project_id} (${hydratedProject.status ?? "unknown status"})`,
       );
@@ -652,11 +656,21 @@ export function TaskStoreProvider({ children }) {
 
   const checkBackendHealth = async () => {
     dispatch({ type: "PATCH_BACKEND_HEALTH", payload: { loading: true } });
+    let latencyMs = null;
     try {
+      const startedAt =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
       const healthResponse = await fetch(withApiBase("/api/health"), {
         cache: "no-store",
         headers: { Accept: "application/json" },
       });
+      const endedAt =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+      latencyMs = Math.max(0, Math.round(endedAt - startedAt));
       const healthData = await parseJsonResponse(healthResponse, "/api/health");
 
       if (!healthResponse.ok) {
@@ -697,6 +711,7 @@ export function TaskStoreProvider({ children }) {
           url: BACKEND_DISPLAY_URL,
           environment: healthData.environment ?? "-",
           zepConfigured: Boolean(healthData.zep_configured ?? healthData.zepConfigured),
+          latencyMs,
           message,
         },
       });
@@ -710,6 +725,7 @@ export function TaskStoreProvider({ children }) {
           url: BACKEND_DISPLAY_URL,
           environment: "-",
           zepConfigured: false,
+          latencyMs,
           message: String(error),
         },
       });
@@ -747,7 +763,14 @@ export function TaskStoreProvider({ children }) {
 
     dispatch({
       type: "PATCH_ONTOLOGY_TASK",
-      payload: { status: "running", message: "Generating ontology..." },
+      payload: {
+        status: "running",
+        message: "Submitting ontology generation task...",
+        progress: 0,
+        taskId: "",
+        entityTypes: 0,
+        edgeTypes: 0,
+      },
     });
     addSystemLog(
       normalizedProjectId
@@ -778,40 +801,21 @@ export function TaskStoreProvider({ children }) {
       if (!response.ok || !payload?.success) {
         throw new Error(payload?.error ?? "Ontology generation failed");
       }
+      const submittedTaskId = String(payload?.data?.task_id ?? "").trim();
+      if (!submittedTaskId) {
+        throw new Error("Ontology generation task id is missing");
+      }
 
-      const nextProjectId = payload?.data?.project_id ?? "";
-      const entityTypes = payload?.data?.ontology?.entity_types?.length ?? 0;
-      const edgeTypes = payload?.data?.ontology?.edge_types?.length ?? 0;
-
       dispatch({
-        type: "SET_FORM_FIELDS",
+        type: "PATCH_ONTOLOGY_TASK",
         payload: {
-          projectId: nextProjectId,
-          graphName: "",
+          status: "running",
+          message: payload?.data?.message ?? "Ontology task submitted",
+          taskId: submittedTaskId,
         },
       });
-      rememberLastProjectId(nextProjectId);
-      dispatch({
-        type: "SET_ONTOLOGY_TASK",
-        payload: {
-          status: "success",
-          message: `Ontology generated for ${nextProjectId}`,
-          entityTypes,
-          edgeTypes,
-        },
-      });
-      addSystemLog(`Ontology generated for ${nextProjectId}.`);
-      dispatch({
-        type: "PATCH_GRAPH_TASK",
-        payload: {
-          status: "idle",
-          message: "Ready to build graph",
-          progress: 0,
-          taskId: "",
-        },
-      });
-      await switchProject(nextProjectId);
-      await fetchProjects(nextProjectId, false);
+      lastOntologyTaskMessageRef.current = payload?.data?.message ?? "";
+      addSystemLog(payload?.data?.message ?? "Ontology task submitted.");
     } catch (error) {
       addSystemLog(`Exception in generateOntology: ${String(error)}`);
       dispatch({
@@ -885,7 +889,7 @@ export function TaskStoreProvider({ children }) {
         },
       });
       const submittedMessage = payload?.data?.message ?? "Graph build submitted";
-      lastPolledTaskMessageRef.current = submittedMessage;
+      lastGraphTaskMessageRef.current = submittedMessage;
       addSystemLog(submittedMessage);
       await fetchProjects(projectId, false);
     } catch (error) {
@@ -912,6 +916,131 @@ export function TaskStoreProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    if (!state.ontologyTask.taskId) return undefined;
+
+    let cancelled = false;
+    const { taskId } = state.ontologyTask;
+    addSystemLog(`Polling ontology task ${taskId}...`);
+
+    const poll = async () => {
+      try {
+        const response = await fetch(withApiBase(`/api/task/${taskId}`));
+        const payload = await response.json();
+        if (!response.ok || !payload?.success) {
+          throw new Error(payload?.error ?? "Ontology task polling failed");
+        }
+
+        const task = payload.data;
+        if (cancelled) return;
+
+        if (task.message && task.message !== lastOntologyTaskMessageRef.current) {
+          lastOntologyTaskMessageRef.current = task.message;
+          addSystemLog(task.message);
+        }
+
+        const progressProjectId = normalizeProjectId(task?.progress_detail?.project_id ?? "");
+        if (progressProjectId && progressProjectId !== normalizeProjectId(state.form.projectId)) {
+          dispatch({
+            type: "SET_FORM_FIELDS",
+            payload: {
+              projectId: progressProjectId,
+            },
+          });
+          rememberLastProjectId(progressProjectId);
+        }
+
+        if (task.status === "completed") {
+          const nextProjectId = normalizeProjectId(task?.result?.project_id ?? progressProjectId);
+          const entityTypes = task?.result?.ontology?.entity_types?.length ?? 0;
+          const edgeTypes = task?.result?.ontology?.edge_types?.length ?? 0;
+
+          dispatch({
+            type: "SET_ONTOLOGY_TASK",
+            payload: {
+              ...initialOntologyTask,
+              status: "success",
+              message:
+                task.message ??
+                (nextProjectId ? `Ontology generated for ${nextProjectId}` : "Ontology generated"),
+              progress: 100,
+              entityTypes,
+              edgeTypes,
+            },
+          });
+
+          dispatch({
+            type: "PATCH_GRAPH_TASK",
+            payload: {
+              status: "idle",
+              message: "Ready to build graph",
+              progress: 0,
+              taskId: "",
+            },
+          });
+
+          if (nextProjectId) {
+            dispatch({
+              type: "SET_FORM_FIELDS",
+              payload: {
+                projectId: nextProjectId,
+                graphName: "",
+              },
+            });
+            rememberLastProjectId(nextProjectId);
+            addSystemLog(`Ontology generated for ${nextProjectId}.`);
+            await switchProject(nextProjectId);
+            await fetchProjects(nextProjectId, false);
+          } else {
+            addSystemLog("Ontology generated.");
+          }
+          return;
+        }
+
+        if (task.status === "failed") {
+          dispatch({
+            type: "PATCH_ONTOLOGY_TASK",
+            payload: {
+              status: "error",
+              message: task.error ?? task.message ?? "Ontology generation failed",
+              taskId: "",
+              progress: 100,
+            },
+          });
+          addSystemLog(`Ontology generation failed: ${task.error ?? "Unknown error"}`);
+          return;
+        }
+
+        dispatch({
+          type: "PATCH_ONTOLOGY_TASK",
+          payload: {
+            status: "running",
+            message: task.message ?? "Generating ontology...",
+            progress: task.progress ?? 0,
+          },
+        });
+      } catch (error) {
+        if (cancelled) return;
+        addSystemLog(`Exception in pollOntologyTaskStatus: ${String(error)}`);
+        dispatch({
+          type: "PATCH_ONTOLOGY_TASK",
+          payload: {
+            status: "error",
+            message: String(error),
+            taskId: "",
+          },
+        });
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [state.ontologyTask.taskId]);
+
+  useEffect(() => {
     if (!state.graphTask.taskId) return undefined;
 
     let cancelled = false;
@@ -928,8 +1057,8 @@ export function TaskStoreProvider({ children }) {
 
         const task = payload.data;
         if (cancelled) return;
-        if (task.message && task.message !== lastPolledTaskMessageRef.current) {
-          lastPolledTaskMessageRef.current = task.message;
+        if (task.message && task.message !== lastGraphTaskMessageRef.current) {
+          lastGraphTaskMessageRef.current = task.message;
           addSystemLog(task.message);
         }
 

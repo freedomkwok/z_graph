@@ -68,9 +68,22 @@ spec:
         - name: app
           image: your-registry/zep-graph:prod
           imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "debugpy"]
+          args:
+            - "--listen"
+            - "0.0.0.0:5678"
+            - "-m"
+            - "uvicorn"
+            - "app.main:app"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
           ports:
             - containerPort: 8000
               name: http
+            - containerPort: 5678
+              name: debug
           envFrom:
             - configMapRef:
                 name: zep-graph-config
@@ -78,7 +91,7 @@ spec:
                 name: zep-graph-secrets
           readinessProbe:
             httpGet:
-              path: /
+              path: /api/health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
@@ -86,7 +99,7 @@ spec:
             failureThreshold: 6
           livenessProbe:
             httpGet:
-              path: /
+              path: /api/health
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20
@@ -112,6 +125,9 @@ spec:
     - name: http
       port: 80
       targetPort: http
+    - name: debug
+      port: 5678
+      targetPort: debug
   type: ClusterIP
 ---
 apiVersion: networking.k8s.io/v1

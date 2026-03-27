@@ -17,10 +17,17 @@ export default function TopBar({ currentPage = "workspace", onNavigate }) {
   const [settingsPinned, setSettingsPinned] = useState(false);
   const settingsMenuRef = useRef(null);
   const closeTimerRef = useRef(null);
+  const latencyLabel = useMemo(() => {
+    if (!Number.isFinite(backendHealth.latencyMs)) return "";
+    return `${backendHealth.latencyMs} ms`;
+  }, [backendHealth.latencyMs]);
+  const backendStatusText = useMemo(() => {
+    return latencyLabel ? `${backendHealth.url} (${latencyLabel})` : backendHealth.url;
+  }, [backendHealth.url, latencyLabel]);
   const backendStatusTitle = useMemo(() => {
-    if (backendHealth.loading) return `Checking ${backendHealth.url}`;
-    return backendHealth.online ? `Online: ${backendHealth.url}` : `Offline: ${backendHealth.url}`;
-  }, [backendHealth.loading, backendHealth.online, backendHealth.url]);
+    if (backendHealth.loading) return `Checking ${backendStatusText}`;
+    return backendHealth.online ? `Online: ${backendStatusText}` : `Offline: ${backendStatusText}`;
+  }, [backendHealth.loading, backendHealth.online, backendStatusText]);
 
   const hasSelectedProject = useMemo(
     () => projectCatalog.items.some((project) => project.project_id === form.projectId),
@@ -196,7 +203,7 @@ export default function TopBar({ currentPage = "workspace", onNavigate }) {
       <div className="backend-status-wrap">
         <span className={`status-dot ${backendHealth.online ? "online" : "offline"}`} />
         <span className="status-text" title={backendStatusTitle}>
-          {backendHealth.url}
+          {backendStatusText}
         </span>
         <button
           className="icon-btn"

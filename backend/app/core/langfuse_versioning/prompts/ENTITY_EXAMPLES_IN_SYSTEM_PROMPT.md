@@ -1,8 +1,0 @@
-- Student: student
-- Professor: professor/scholar
-- Journalist: journalist
-- Celebrity: celebrity/influencer
-- Executive: executive
-- Official: government official
-- Lawyer: lawyer
-- Doctor: doctor

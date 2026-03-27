@@ -2,6 +2,7 @@ import os
 import shutil
 import threading
 import traceback
+import uuid
 from typing import Annotated, Any
 from urllib.parse import quote
 
@@ -28,16 +29,14 @@ DEFAULT_CHUNK_OVERLAP = 50
 ProjectPatchBody = Annotated[dict[str, Any], Body(default_factory=dict)]
 
 
-class _UploadFileAdapter:
-    """Adapter to reuse ProjectManager.save_file_to_project with FastAPI uploads."""
+class _LocalFileAdapter:
+    """Adapter to save a local staged file into a project."""
 
-    def __init__(self, upload: UploadFile) -> None:
-        self._upload = upload
+    def __init__(self, source_path: str) -> None:
+        self._source_path = source_path
 
     def save(self, destination_path: str) -> None:
-        self._upload.file.seek(0)
-        with open(destination_path, "wb") as output:
-            shutil.copyfileobj(self._upload.file, output)
+        shutil.copyfile(self._source_path, destination_path)
 
 
 def _error_response(status_code: int, error: str, exc: Exception | None = None) -> JSONResponse:
@@ -210,95 +209,268 @@ def generate_ontology(
             return _error_response(400, "Upload at least one document file")
 
         normalized_project_id = str(project_id or "").strip()
-        created_new_project = False
+        normalized_project_name = str(project_name or "").strip() or "Unnamed Project"
         if normalized_project_id:
-            project = ProjectManager.get_project(normalized_project_id)
-            if not project:
+            existing_project = ProjectManager.get_project(normalized_project_id)
+            if not existing_project:
                 return _error_response(404, f"Project not found: {normalized_project_id}")
-            if project_name and str(project_name).strip():
-                project.name = str(project_name).strip()
-            logger.info(f"Reusing Project: {project.project_id}")
-        else:
-            project = ProjectManager.create_project(name=project_name)
-            created_new_project = True
-            logger.info(f"Created Project: {project.project_id}")
+            logger.info(f"Will reuse Project: {normalized_project_id}")
 
-        project.context_requirement = requirement
-        project.prompt_label = PromptLabelManager.ensure_label_exists(
+        resolved_prompt_label = PromptLabelManager.ensure_label_exists(
             OntologyGenerator._normalize_prompt_label(prompt_label)
         )
-        project.error = None
 
-        document_texts: list[str] = []
-        all_text = ""
+        task_manager = TaskManager()
+        task_display_name = normalized_project_id or normalized_project_name
+        task_id = task_manager.create_task(
+            f"generate_ontology: {task_display_name}",
+            metadata={"project_id": normalized_project_id} if normalized_project_id else None,
+        )
+
+        task_manager.update_task(
+            task_id,
+            status=TaskStatus.PROCESSING,
+            message="Uploading files",
+            progress=5,
+            progress_detail={
+                "step": "upload_pdf",
+            },
+        )
+
+        staging_dir = os.path.join(Config.UPLOAD_FOLDER, "ontology_staging", task_id)
+        os.makedirs(staging_dir, exist_ok=True)
+        staged_files: list[dict[str, Any]] = []
 
         for upload in uploaded_files:
             if not allowed_file(upload.filename):
                 continue
 
-            adapter = _UploadFileAdapter(upload)
-            file_info = ProjectManager.save_file_to_project(
-                project.project_id,
-                adapter,
-                upload.filename,
-            )
-            project.files.append(
+            ext = os.path.splitext(upload.filename)[1].lower()
+            staged_filename = f"{uuid.uuid4().hex[:16]}{ext}"
+            staged_path = os.path.join(staging_dir, staged_filename)
+            upload.file.seek(0)
+            with open(staged_path, "wb") as output:
+                shutil.copyfileobj(upload.file, output)
+
+            staged_files.append(
                 {
-                    "filename": file_info["original_filename"],
-                    "size": file_info["size"],
+                    "original_filename": upload.filename,
+                    "path": staged_path,
+                    "size": os.path.getsize(staged_path),
                 }
             )
 
-            text = FileParser.extract_text(file_info["path"])
-            text = TextProcessor.preprocess_text(text)
-            if text:
-                document_texts.append(text)
-                all_text += f"\n\n=== {file_info['original_filename']} ===\n{text}"
-
-        if not document_texts:
-            if created_new_project:
-                ProjectManager.delete_project(project.project_id)
+        if not staged_files:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            task_manager.update_task(
+                task_id,
+                status=TaskStatus.FAILED,
+                message="No supported files were uploaded",
+                progress=100,
+                error="not successful, please check file format",
+                progress_detail={
+                    "step": "upload_pdf",
+                },
+            )
             return _error_response(400, "not successful, please check file format")
 
-        project.total_text_length = len(all_text)
-        ProjectManager.save_extracted_text(project.project_id, all_text)
-        logger.info(f"Total Extracted Text: {len(all_text)} Words")
-
-        logger.info("LLM Generating Ontology")
-        generator = OntologyGenerator()
-        ontology = generator.generate(
-            document_texts=document_texts,
-            context_requirement=requirement,
-            additional_context=additional_context or None,
-            prompt_label=project.prompt_label,
+        total_files = len(staged_files)
+        task_manager.update_task(
+            task_id,
+            message=f"Uploaded {total_files} file(s)",
+            progress=10,
+            progress_detail={
+                "step": "upload_pdf",
+                "uploaded_files": total_files,
+                "total_files": total_files,
+            },
         )
 
-        entity_count = len(ontology.get("entity_types", []))
-        edge_count = len(ontology.get("edge_types", []))
-        logger.info(f"Ontology Generated: {entity_count} Entities, {edge_count} Edges")
+        def generate_task() -> None:
+            project = None
+            created_new_project = False
+            try:
+                task_manager.update_task(
+                    task_id,
+                    message="Processing uploaded files",
+                    progress=15,
+                    progress_detail={
+                        "step": "process_pdf",
+                        "processed_files": 0,
+                        "total_files": total_files,
+                    },
+                )
 
-        project.ontology = {
-            "entity_types": ontology.get("entity_types", []),
-            "edge_types": ontology.get("edge_types", []),
-        }
-        project.analysis_summary = ontology.get("analysis_summary", "")
-        project.status = ProjectStatus.ONTOLOGY_GENERATED
-        ProjectManager.save_project(project)
-        logger.info(f"Ontology Generated Project[{project.project_id}]")
+                document_texts: list[str] = []
+                extracted_sections: list[str] = []
+
+                for index, staged_file in enumerate(staged_files, start=1):
+                    process_progress = 15 + int((index / max(total_files, 1)) * 30)
+                    task_manager.update_task(
+                        task_id,
+                        message=f"Processing file {index}/{total_files}: {staged_file['original_filename']}",
+                        progress=process_progress,
+                        progress_detail={
+                            "step": "process_pdf",
+                            "processed_files": index,
+                            "total_files": total_files,
+                        },
+                    )
+
+                    text = FileParser.extract_text(staged_file["path"])
+                    text = TextProcessor.preprocess_text(text)
+                    if text:
+                        document_texts.append(text)
+                        extracted_sections.append(
+                            f"=== {staged_file['original_filename']} ===\n{text}"
+                        )
+
+                if not document_texts:
+                    raise ValueError("not successful, please check file format")
+
+                all_text = "\n\n".join(extracted_sections)
+
+                task_manager.update_task(
+                    task_id,
+                    message="Creating project",
+                    progress=50,
+                    progress_detail={
+                        "step": "create_project",
+                    },
+                )
+                if normalized_project_id:
+                    project = ProjectManager.get_project(normalized_project_id)
+                    if not project:
+                        raise ValueError(f"Project not found: {normalized_project_id}")
+                    if normalized_project_name:
+                        project.name = normalized_project_name
+                    logger.info(f"Reusing Project: {project.project_id}")
+                else:
+                    project = ProjectManager.create_project(name=normalized_project_name, persist=False)
+                    created_new_project = True
+                    logger.info(f"Prepared Project: {project.project_id}")
+
+                project.context_requirement = requirement
+                project.prompt_label = resolved_prompt_label
+                project.error = None
+
+                task_manager.update_task(
+                    task_id,
+                    message=f"Project ready: {project.project_id}",
+                    progress=60,
+                    progress_detail={
+                        "step": "create_project",
+                        "project_id": project.project_id,
+                    },
+                )
+
+                task_manager.update_task(
+                    task_id,
+                    message="Starting OntologyGenerator",
+                    progress=70,
+                    progress_detail={
+                        "step": "ontology_generator",
+                        "project_id": project.project_id,
+                    },
+                )
+                generator = OntologyGenerator()
+                ontology = generator.generate(
+                    document_texts=document_texts,
+                    context_requirement=requirement,
+                    additional_context=additional_context or None,
+                    prompt_label=project.prompt_label,
+                )
+
+                entity_count = len(ontology.get("entity_types", []))
+                edge_count = len(ontology.get("edge_types", []))
+                logger.info(f"Ontology Generated: {entity_count} Entities, {edge_count} Edges")
+
+                task_manager.update_task(
+                    task_id,
+                    message="Saving project data and ontology",
+                    progress=90,
+                    progress_detail={
+                        "step": "save_project",
+                        "project_id": project.project_id,
+                        "entity_types": entity_count,
+                        "edge_types": edge_count,
+                    },
+                )
+
+                for staged_file in staged_files:
+                    adapter = _LocalFileAdapter(staged_file["path"])
+                    file_info = ProjectManager.save_file_to_project(
+                        project.project_id,
+                        adapter,
+                        staged_file["original_filename"],
+                    )
+                    project.files.append(
+                        {
+                            "filename": file_info["original_filename"],
+                            "size": file_info["size"],
+                        }
+                    )
+
+                project.total_text_length = len(all_text)
+                ProjectManager.save_extracted_text(project.project_id, all_text)
+                logger.info(f"Total Extracted Text: {len(all_text)} Words")
+
+                project.ontology = {
+                    "entity_types": ontology.get("entity_types", []),
+                    "edge_types": ontology.get("edge_types", []),
+                }
+                project.analysis_summary = ontology.get("analysis_summary", "")
+                project.status = ProjectStatus.ONTOLOGY_GENERATED
+                ProjectManager.save_project(project)
+                logger.info(f"Ontology Generated Project[{project.project_id}]")
+
+                task_manager.update_task(
+                    task_id,
+                    status=TaskStatus.COMPLETED,
+                    message="Ontology generation completed",
+                    progress=100,
+                    result={
+                        "project_id": project.project_id,
+                        "project_name": project.name,
+                        "ontology": project.ontology,
+                        "analysis_summary": project.analysis_summary,
+                        "files": project.files,
+                        "total_text_length": project.total_text_length,
+                    },
+                    progress_detail={
+                        "step": "completed",
+                        "project_id": project.project_id,
+                    },
+                )
+            except Exception as exc:
+                if created_new_project and project is not None:
+                    ProjectManager.delete_project(project.project_id)
+                logger.exception("Ontology Generation Failed")
+                task_manager.update_task(
+                    task_id,
+                    status=TaskStatus.FAILED,
+                    message=f"Ontology generation failed: {exc}",
+                    progress=100,
+                    error=traceback.format_exc(),
+                    progress_detail={
+                        "step": "failed",
+                    },
+                )
+            finally:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+
+        thread = threading.Thread(target=generate_task, daemon=True)
+        thread.start()
 
         return {
             "success": True,
             "data": {
-                "project_id": project.project_id,
-                "project_name": project.name,
-                "ontology": project.ontology,
-                "analysis_summary": project.analysis_summary,
-                "files": project.files,
-                "total_text_length": project.total_text_length,
+                "task_id": task_id,
+                "message": f"Ontology Generate Task Started, please refer to /task/{task_id} for progress",
             },
         }
     except Exception as exc:
-        logger.exception("Ontology Generation Failed")
+        logger.exception("Ontology Generate Request Failed")
         return _error_response(500, str(exc), exc)
 
 

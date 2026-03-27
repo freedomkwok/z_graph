@@ -197,6 +197,13 @@ export default function TaskPanel() {
                   </button>
                 </form>
 
+                <div className="progress-wrap">
+                  <div className="progress-track">
+                    <div className="progress-fill" style={{ width: `${ontologyTask.progress ?? 0}%` }} />
+                  </div>
+                  <span>{ontologyTask.progress ?? 0}%</span>
+                </div>
+
                 <p className="status-line">{ontologyTask.message}</p>
                 <div className="stat-grid">
                   <div className="stat-box">
