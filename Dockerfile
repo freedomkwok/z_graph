@@ -17,6 +17,8 @@ COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 COPY backend/app ./app
+# Required by ProjectManager startup schema initialization when STORAGE=postgres.
+COPY database/init_tables.sql /database/init_tables.sql
 # COPY backend/.env.example ./.env.example
 COPY --from=frontend-builder /frontend/dist ./app/static
 
