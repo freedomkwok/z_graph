@@ -18,7 +18,7 @@ DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCES = (
     "app/core/langfuse_versioning/prompts",
     "app/core/langfuse_versioning/sub_queries",
-    "app/core/langfuse_versioning/fallback_entites",
+    "app/core/langfuse_versioning/fallback_entities",
 )
 LANGFUSE_PROMPT_REF_RE = re.compile(r"@@@langfusePrompt:([^@]+)@@@")
 LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
@@ -114,7 +114,7 @@ def _infer_labels_from_file_path(relative_file_path: Path, sources: Iterable[str
 
     root_category = parts[0]
     label_candidate = normalize_label(parts[1])
-    if root_category not in {"prompts", "sub_queries", "fallback_entites"}:
+    if root_category not in {"prompts", "sub_queries", "fallback_entities"}:
         return []
     if not LABEL_PATTERN.fullmatch(label_candidate):
         return []

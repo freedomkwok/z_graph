@@ -20,7 +20,7 @@ import httpx
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = "app/core/langfuse_versioning"
 LANGFUSE_LIST_KEYS = ("data", "prompts", "items", "result")
-SUPPORTED_CATEGORIES = {"prompts", "sub_queries", "fallback_entites"}
+SUPPORTED_CATEGORIES = {"prompts", "sub_queries", "fallback_entities"}
 LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
 
@@ -110,7 +110,7 @@ def _resolve_download_labels(
 
 def _resolve_file_extension(prompt_name: str) -> str:
     category = _normalize_category(prompt_name.split("/", 1)[0])
-    if category == "fallback_entites":
+    if category == "fallback_entities":
         return ".json"
     return ".md"
 

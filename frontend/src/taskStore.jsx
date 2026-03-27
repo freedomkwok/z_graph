@@ -221,6 +221,187 @@ function getGraphTaskFromProject(project) {
   }
 }
 
+function normalizeOntologyTypeName(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeOntologyLookupKey(value) {
+  return normalizeOntologyTypeName(value).toLowerCase();
+}
+
+function normalizeOntologyTypeNames(values) {
+  const normalizedNames = [];
+  const seen = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const normalized = normalizeOntologyTypeName(value);
+    if (!normalized) continue;
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    normalizedNames.push(normalized);
+  }
+  return normalizedNames;
+}
+
+function takeDefinitionByName(definitionsByName, usedIndexes, lookupName) {
+  const candidates = definitionsByName.get(normalizeOntologyLookupKey(lookupName)) ?? [];
+  for (const candidate of candidates) {
+    if (usedIndexes.has(candidate.index)) continue;
+    usedIndexes.add(candidate.index);
+    return candidate;
+  }
+  return null;
+}
+
+function takeDefinitionByIndex(definitions, usedIndexes, index) {
+  if (index >= 0 && index < definitions.length && !usedIndexes.has(index)) {
+    usedIndexes.add(index);
+    return { definition: definitions[index], index };
+  }
+
+  for (let cursor = 0; cursor < definitions.length; cursor += 1) {
+    if (usedIndexes.has(cursor)) continue;
+    usedIndexes.add(cursor);
+    return { definition: definitions[cursor], index: cursor };
+  }
+  return null;
+}
+
+function buildUpdatedOntologyFromTypeNames(existingOntology, entityTypeNames, edgeTypeNames) {
+  const baseOntology =
+    existingOntology && typeof existingOntology === "object" ? existingOntology : {};
+  const existingEntityTypes = Array.isArray(baseOntology.entity_types)
+    ? baseOntology.entity_types
+    : [];
+  const existingEdgeTypes = Array.isArray(baseOntology.edge_types) ? baseOntology.edge_types : [];
+
+  const normalizedEntityTypeNames = normalizeOntologyTypeNames(entityTypeNames);
+  const normalizedEdgeTypeNames = normalizeOntologyTypeNames(edgeTypeNames);
+
+  const entityDefinitionsByName = new Map();
+  existingEntityTypes.forEach((definition, index) => {
+    const key = normalizeOntologyLookupKey(definition?.name);
+    if (!key) return;
+    const definitions = entityDefinitionsByName.get(key) ?? [];
+    definitions.push({ definition, index });
+    entityDefinitionsByName.set(key, definitions);
+  });
+
+  const usedEntityIndexes = new Set();
+  const entitySources = normalizedEntityTypeNames.map((name, index) => {
+    return (
+      takeDefinitionByName(entityDefinitionsByName, usedEntityIndexes, name) ??
+      takeDefinitionByIndex(existingEntityTypes, usedEntityIndexes, index)
+    );
+  });
+
+  const nextEntityTypes = normalizedEntityTypeNames.map((name, index) => {
+    const source = entitySources[index];
+    const existingEntity = source?.definition;
+    if (existingEntity && typeof existingEntity === "object") {
+      return {
+        ...existingEntity,
+        name,
+        attributes: Array.isArray(existingEntity.attributes) ? existingEntity.attributes : [],
+        examples: Array.isArray(existingEntity.examples) ? existingEntity.examples : [],
+      };
+    }
+    return {
+      name,
+      description: `A ${name} entity.`,
+      attributes: [],
+      examples: [],
+    };
+  });
+
+  const entityRenameMap = new Map();
+  entitySources.forEach((source, index) => {
+    const existingName = normalizeOntologyTypeName(source?.definition?.name);
+    const updatedName = normalizedEntityTypeNames[index];
+    if (!existingName || !updatedName || existingName === updatedName) return;
+    entityRenameMap.set(existingName, updatedName);
+  });
+
+  const entityNameSet = new Set(normalizedEntityTypeNames);
+  const fallbackSource = normalizedEntityTypeNames[0] || "Entity";
+  const fallbackTarget = normalizedEntityTypeNames[1] || normalizedEntityTypeNames[0] || "Entity";
+
+  const normalizeSourceOrTarget = (value, fallbackName) => {
+    const normalizedName = normalizeOntologyTypeName(value);
+    const renamed = entityRenameMap.get(normalizedName) ?? normalizedName;
+    if (!entityNameSet.size) {
+      return renamed || "Entity";
+    }
+    if (renamed && entityNameSet.has(renamed)) {
+      return renamed;
+    }
+    return fallbackName;
+  };
+
+  const edgeDefinitionsByName = new Map();
+  existingEdgeTypes.forEach((definition, index) => {
+    const key = normalizeOntologyLookupKey(definition?.name);
+    if (!key) return;
+    const definitions = edgeDefinitionsByName.get(key) ?? [];
+    definitions.push({ definition, index });
+    edgeDefinitionsByName.set(key, definitions);
+  });
+
+  const usedEdgeIndexes = new Set();
+  const edgeSources = normalizedEdgeTypeNames.map((name, index) => {
+    return (
+      takeDefinitionByName(edgeDefinitionsByName, usedEdgeIndexes, name) ??
+      takeDefinitionByIndex(existingEdgeTypes, usedEdgeIndexes, index)
+    );
+  });
+
+  const nextEdgeTypes = normalizedEdgeTypeNames.map((name, index) => {
+    const source = edgeSources[index];
+    const existingEdge = source?.definition;
+    const edgeBase =
+      existingEdge && typeof existingEdge === "object"
+        ? { ...existingEdge, name }
+        : {
+            name,
+            description: `A ${name} relationship.`,
+            attributes: [],
+            source_targets: [],
+          };
+
+    const sourceTargets = [];
+    const rawSourceTargets = Array.isArray(edgeBase.source_targets) ? edgeBase.source_targets : [];
+    for (const rawSourceTarget of rawSourceTargets) {
+      if (!rawSourceTarget || typeof rawSourceTarget !== "object") continue;
+      sourceTargets.push({
+        source: normalizeSourceOrTarget(rawSourceTarget.source, fallbackSource),
+        target: normalizeSourceOrTarget(rawSourceTarget.target, fallbackTarget),
+      });
+    }
+
+    if (sourceTargets.length === 0) {
+      sourceTargets.push({
+        source: fallbackSource,
+        target: fallbackTarget,
+      });
+    }
+
+    return {
+      ...edgeBase,
+      name,
+      attributes: Array.isArray(edgeBase.attributes) ? edgeBase.attributes : [],
+      source_targets: sourceTargets,
+    };
+  });
+
+  return {
+    ...baseOntology,
+    entity_types: nextEntityTypes,
+    edge_types: nextEdgeTypes,
+  };
+}
+
 function taskReducer(state, action) {
   switch (action.type) {
     case "SET_VIEW_MODE":
@@ -316,10 +497,35 @@ export function TaskStoreProvider({ children }) {
   const [state, dispatch] = useReducer(taskReducer, initialState);
   const lastOntologyTaskMessageRef = useRef("");
   const lastGraphTaskMessageRef = useRef("");
+  const seenOntologyLatencyEventIdsRef = useRef(new Set());
+  const seenGraphLatencyEventIdsRef = useRef(new Set());
 
   const addSystemLog = (message) => {
     if (!message) return;
     dispatch({ type: "ADD_SYSTEM_LOG", payload: message });
+  };
+
+  const appendTaskLatencyLogs = (task, seenEventsRef, stepLabel) => {
+    const latencyEvents = Array.isArray(task?.progress_detail?.latency_events)
+      ? task.progress_detail.latency_events
+      : [];
+
+    for (const event of latencyEvents) {
+      const operation = String(event?.operation ?? "").trim();
+      if (!operation) continue;
+
+      const eventId = String(event?.event_id ?? "").trim();
+      const fallbackId = `${operation}:${String(event?.elapsed_ms ?? "")}:${String(event?.timestamp ?? "")}`;
+      const dedupeId = eventId || fallbackId;
+      if (!dedupeId || seenEventsRef.current.has(dedupeId)) continue;
+      seenEventsRef.current.add(dedupeId);
+
+      const elapsedMs = Number(event?.elapsed_ms);
+      const elapsedText = Number.isFinite(elapsedMs)
+        ? `${elapsedMs.toFixed(2)}ms`
+        : `${String(event?.elapsed_ms ?? "-")}ms`;
+      addSystemLog(`[Latency][${stepLabel}] ${operation}: ${elapsedText}`);
+    }
   };
 
   const setViewMode = (mode) => {
@@ -455,6 +661,8 @@ export function TaskStoreProvider({ children }) {
       });
       lastOntologyTaskMessageRef.current = "";
       lastGraphTaskMessageRef.current = "";
+      seenOntologyLatencyEventIdsRef.current = new Set();
+      seenGraphLatencyEventIdsRef.current = new Set();
       addSystemLog("No project selected.");
       return;
     }
@@ -520,6 +728,8 @@ export function TaskStoreProvider({ children }) {
       });
       lastOntologyTaskMessageRef.current = "";
       lastGraphTaskMessageRef.current = "";
+      seenOntologyLatencyEventIdsRef.current = new Set();
+      seenGraphLatencyEventIdsRef.current = new Set();
       addSystemLog(
         `Project loaded: ${hydratedProject.project_id} (${hydratedProject.status ?? "unknown status"})`,
       );
@@ -680,6 +890,78 @@ export function TaskStoreProvider({ children }) {
     }
   };
 
+  const updateProjectOntologyTypes = async (projectId, { entityTypeNames, edgeTypeNames }) => {
+    const normalizedProjectId = normalizeProjectId(projectId);
+    if (!normalizedProjectId) {
+      throw new Error("project_id is required");
+    }
+
+    const nextOntology = buildUpdatedOntologyFromTypeNames(
+      state.currentProject?.ontology,
+      entityTypeNames,
+      edgeTypeNames,
+    );
+
+    addSystemLog(`Saving ontology edits for ${normalizedProjectId}...`);
+    const response = await fetch(withApiBase(`/api/project/${normalizedProjectId}`), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ontology: nextOntology }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload?.success) {
+      throw new Error(payload?.error ?? "Failed to update ontology");
+    }
+
+    const updatedProject = payload?.data ?? {};
+    const updatedOntology = updatedProject?.ontology ?? nextOntology;
+    const entityTypes = updatedOntology?.entity_types?.length ?? 0;
+    const edgeTypes = updatedOntology?.edge_types?.length ?? 0;
+    dispatch({
+      type: "PATCH_CURRENT_PROJECT",
+      payload: {
+        ...updatedProject,
+        project_id: updatedProject?.project_id ?? normalizedProjectId,
+        status: updatedProject?.status ?? "ontology_generated",
+        ontology: updatedOntology,
+        zep_graph_id: updatedProject?.zep_graph_id ?? "",
+        graph_id: updatedProject?.zep_graph_id ?? "",
+        project_workspace_id: updatedProject?.project_workspace_id ?? "",
+        zep_graph_address: updatedProject?.zep_graph_address ?? "",
+        graph_build_task_id: "",
+        error: null,
+      },
+    });
+    dispatch({
+      type: "PATCH_ONTOLOGY_TASK",
+      payload: {
+        status: "success",
+        message: "Ontology updated. Step B will use the latest types.",
+        progress: 100,
+        taskId: "",
+        entityTypes,
+        edgeTypes,
+      },
+    });
+    dispatch({
+      type: "PATCH_GRAPH_TASK",
+      payload: {
+        status: "idle",
+        message: "Ready to build graph",
+        progress: 0,
+        taskId: "",
+        nodeCount: 0,
+        edgeCount: 0,
+        chunkCount: 0,
+      },
+    });
+    await fetchProjects(normalizedProjectId, false);
+    addSystemLog(
+      `Ontology updated for ${normalizedProjectId} (${entityTypes} entity type${entityTypes === 1 ? "" : "s"}, ${edgeTypes} relationship type${edgeTypes === 1 ? "" : "s"}).`,
+    );
+    return updatedProject;
+  };
+
   const checkBackendHealth = async () => {
     dispatch({ type: "PATCH_BACKEND_HEALTH", payload: { loading: true } });
     let latencyMs = null;
@@ -798,6 +1080,7 @@ export function TaskStoreProvider({ children }) {
         edgeTypes: 0,
       },
     });
+    seenOntologyLatencyEventIdsRef.current = new Set();
     addSystemLog(
       normalizedProjectId
         ? `Starting ontology generation (reuse project: ${normalizedProjectId})...`
@@ -879,6 +1162,7 @@ export function TaskStoreProvider({ children }) {
         chunkCount: 0,
       },
     });
+    seenGraphLatencyEventIdsRef.current = new Set();
     const resolvedGraphName = String(graphName ?? "").trim() || projectId;
     const resolvedChunkSize = normalizePositiveInteger(chunkSize, 500);
     const fallbackOverlap = normalizeNonNegativeInteger(chunkOverlap, 50);
@@ -958,6 +1242,7 @@ export function TaskStoreProvider({ children }) {
 
         const task = payload.data;
         if (cancelled) return;
+        appendTaskLatencyLogs(task, seenOntologyLatencyEventIdsRef, "Step A");
 
         if (task.message && task.message !== lastOntologyTaskMessageRef.current) {
           lastOntologyTaskMessageRef.current = task.message;
@@ -1083,6 +1368,7 @@ export function TaskStoreProvider({ children }) {
 
         const task = payload.data;
         if (cancelled) return;
+        appendTaskLatencyLogs(task, seenGraphLatencyEventIdsRef, "Step B");
         if (task.message && task.message !== lastGraphTaskMessageRef.current) {
           lastGraphTaskMessageRef.current = task.message;
           addSystemLog(task.message);
@@ -1178,6 +1464,7 @@ export function TaskStoreProvider({ children }) {
     fetchProjects,
     refreshProjects,
     updateProjectName,
+    updateProjectOntologyTypes,
     deleteProject,
     checkBackendHealth,
     runOntologyGenerate,

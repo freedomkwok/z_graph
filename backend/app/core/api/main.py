@@ -1,9 +1,11 @@
 import os
 import shutil
 import threading
+import time
 import traceback
 import uuid
-from typing import Annotated, Any
+from datetime import datetime
+from typing import Annotated, Any, Callable
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, File, Form, Query, UploadFile
@@ -27,6 +29,7 @@ logger = get_logger("z_graph.api")
 DEFAULT_CHUNK_SIZE = 500
 DEFAULT_CHUNK_OVERLAP = 50
 ProjectPatchBody = Annotated[dict[str, Any], Body(default_factory=dict)]
+DEV_APP_ENVS = {"dev", "development", "local"}
 
 
 class _LocalFileAdapter:
@@ -56,6 +59,67 @@ def allowed_file(filename: str) -> bool:
     return ext in FileParser.SUPPORTED_EXTENSIONS
 
 
+def _normalize_ontology_type_name(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _sanitize_ontology_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("ontology must be an object")
+
+    raw_entity_types = payload.get("entity_types", [])
+    raw_edge_types = payload.get("edge_types", [])
+    if not isinstance(raw_entity_types, list):
+        raise ValueError("ontology.entity_types must be a list")
+    if not isinstance(raw_edge_types, list):
+        raise ValueError("ontology.edge_types must be a list")
+
+    entity_types: list[dict[str, Any]] = []
+    for raw_entity in raw_entity_types:
+        if not isinstance(raw_entity, dict):
+            continue
+        name = _normalize_ontology_type_name(raw_entity.get("name"))
+        if not name:
+            continue
+        entity = dict(raw_entity)
+        entity["name"] = name
+        if not isinstance(entity.get("attributes"), list):
+            entity["attributes"] = []
+        if not isinstance(entity.get("examples"), list):
+            entity["examples"] = []
+        entity_types.append(entity)
+
+    edge_types: list[dict[str, Any]] = []
+    for raw_edge in raw_edge_types:
+        if not isinstance(raw_edge, dict):
+            continue
+        name = _normalize_ontology_type_name(raw_edge.get("name"))
+        if not name:
+            continue
+        edge = dict(raw_edge)
+        edge["name"] = name
+        if not isinstance(edge.get("attributes"), list):
+            edge["attributes"] = []
+        raw_source_targets = edge.get("source_targets", [])
+        source_targets: list[dict[str, str]] = []
+        if isinstance(raw_source_targets, list):
+            for raw_source_target in raw_source_targets:
+                if not isinstance(raw_source_target, dict):
+                    continue
+                source = _normalize_ontology_type_name(raw_source_target.get("source"))
+                target = _normalize_ontology_type_name(raw_source_target.get("target"))
+                if not source or not target:
+                    continue
+                source_targets.append({"source": source, "target": target})
+        edge["source_targets"] = source_targets
+        edge_types.append(edge)
+
+    return {
+        "entity_types": entity_types,
+        "edge_types": edge_types,
+    }
+
+
 def _build_zep_graph_address(graph_id: str, project_workspace_id: str | None = None) -> str:
     template = str(Config.ZEP_GRAPH_URL_TEMPLATE or "").strip()
     if template:
@@ -75,6 +139,71 @@ def _build_zep_graph_address(graph_id: str, project_workspace_id: str | None = N
         )
     # Fallback keeps existing behavior while carrying graph id for deep-link support.
     return f"https://app.getzep.com/?graph_id={quote(graph_id, safe='')}"
+
+
+def _is_dev_mode() -> bool:
+    return str(Config.APP_ENV or "").strip().lower() in DEV_APP_ENVS
+
+
+def _append_task_latency_event(
+    task_manager: TaskManager,
+    task_id: str,
+    *,
+    step: str,
+    operation: str,
+    elapsed_ms: float,
+) -> None:
+    if not _is_dev_mode():
+        return
+
+    task = task_manager.get_task(task_id)
+    if task is None:
+        return
+
+    event = {
+        "event_id": uuid.uuid4().hex,
+        "step": step,
+        "operation": operation,
+        "elapsed_ms": round(float(elapsed_ms), 2),
+        "timestamp": datetime.now().isoformat(),
+    }
+    progress_detail = dict(task.progress_detail or {})
+    latency_events = list(progress_detail.get("latency_events") or [])
+    latency_events.append(event)
+    if len(latency_events) > 200:
+        latency_events = latency_events[-200:]
+    progress_detail["latency_events"] = latency_events
+    task_manager.update_task(task_id, progress_detail=progress_detail)
+
+    logger.info(
+        "task latency [%s] %s - %.2fms",
+        step,
+        operation,
+        elapsed_ms,
+    )
+
+
+def _timed_task_call(
+    task_manager: TaskManager,
+    task_id: str,
+    step: str,
+    operation: str,
+    func: Callable[..., Any],
+    *args,
+    **kwargs,
+) -> Any:
+    started_at = time.perf_counter()
+    try:
+        return func(*args, **kwargs)
+    finally:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        _append_task_latency_event(
+            task_manager=task_manager,
+            task_id=task_id,
+            step=step,
+            operation=operation,
+            elapsed_ms=elapsed_ms,
+        )
 
 
 @router.get("/project/list")
@@ -159,13 +288,29 @@ def update_project(project_id: str, data: ProjectPatchBody) -> Any:
 
     name = str((data or {}).get("name", "")).strip()
     prompt_label = str((data or {}).get("prompt_label", "")).strip()
-    if not name and not prompt_label:
-        return _error_response(400, "At least one field is required: name or prompt_label")
+    raw_ontology = (data or {}).get("ontology")
+    has_ontology = raw_ontology is not None
+    if not name and not prompt_label and not has_ontology:
+        return _error_response(400, "At least one field is required: name, prompt_label, or ontology")
 
     if name:
         project.name = name
     if prompt_label:
         project.prompt_label = PromptLabelManager.ensure_label_exists(prompt_label)
+    if has_ontology:
+        try:
+            project.ontology = _sanitize_ontology_payload(raw_ontology)
+        except ValueError as exc:
+            return _error_response(400, str(exc))
+
+        # Ontology edits require rebuilding graph with the updated schema.
+        project.status = ProjectStatus.ONTOLOGY_GENERATED
+        project.zep_graph_id = None
+        project.project_workspace_id = None
+        project.zep_graph_address = None
+        project.graph_build_task_id = None
+        project.error = None
+
     ProjectManager.save_project(project)
     return {
         "success": True,
@@ -357,14 +502,29 @@ def generate_ontology(
                     },
                 )
                 if normalized_project_id:
-                    project = ProjectManager.get_project(normalized_project_id)
+                    project = _timed_task_call(
+                        task_manager,
+                        task_id,
+                        "step_a",
+                        "ProjectManager.get_project",
+                        ProjectManager.get_project,
+                        normalized_project_id,
+                    )
                     if not project:
                         raise ValueError(f"Project not found: {normalized_project_id}")
                     if normalized_project_name:
                         project.name = normalized_project_name
                     logger.info(f"Reusing Project: {project.project_id}")
                 else:
-                    project = ProjectManager.create_project(name=normalized_project_name, persist=False)
+                    project = _timed_task_call(
+                        task_manager,
+                        task_id,
+                        "step_a",
+                        "ProjectManager.create_project",
+                        ProjectManager.create_project,
+                        name=normalized_project_name,
+                        persist=False,
+                    )
                     created_new_project = True
                     logger.info(f"Prepared Project: {project.project_id}")
 
@@ -417,7 +577,12 @@ def generate_ontology(
 
                 for staged_file in staged_files:
                     adapter = _LocalFileAdapter(staged_file["path"])
-                    file_info = ProjectManager.save_file_to_project(
+                    file_info = _timed_task_call(
+                        task_manager,
+                        task_id,
+                        "step_a",
+                        "ProjectManager.save_file_to_project",
+                        ProjectManager.save_file_to_project,
                         project.project_id,
                         adapter,
                         staged_file["original_filename"],
@@ -430,7 +595,15 @@ def generate_ontology(
                     )
 
                 project.total_text_length = len(all_text)
-                ProjectManager.save_extracted_text(project.project_id, all_text)
+                _timed_task_call(
+                    task_manager,
+                    task_id,
+                    "step_a",
+                    "ProjectManager.save_extracted_text",
+                    ProjectManager.save_extracted_text,
+                    project.project_id,
+                    all_text,
+                )
                 logger.info(f"Total Extracted Text: {len(all_text)} Words")
 
                 project.ontology = {
@@ -439,7 +612,14 @@ def generate_ontology(
                 }
                 project.analysis_summary = ontology.get("analysis_summary", "")
                 project.status = ProjectStatus.ONTOLOGY_GENERATED
-                ProjectManager.save_project(project)
+                _timed_task_call(
+                    task_manager,
+                    task_id,
+                    "step_a",
+                    "ProjectManager.save_project",
+                    ProjectManager.save_project,
+                    project,
+                )
                 logger.info(f"Ontology Generated Project[{project.project_id}]")
 
                 task_manager.update_task(
@@ -462,7 +642,14 @@ def generate_ontology(
                 )
             except Exception as exc:
                 if created_new_project and project is not None:
-                    ProjectManager.delete_project(project.project_id)
+                    _timed_task_call(
+                        task_manager,
+                        task_id,
+                        "step_a",
+                        "ProjectManager.delete_project",
+                        ProjectManager.delete_project,
+                        project.project_id,
+                    )
                 logger.exception("Ontology Generation Failed")
                 task_manager.update_task(
                     task_id,
@@ -561,7 +748,14 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
 
         project.status = ProjectStatus.GRAPH_BUILDING
         project.graph_build_task_id = task_id
-        ProjectManager.save_project(project)
+        _timed_task_call(
+            task_manager,
+            task_id,
+            "step_b",
+            "ProjectManager.save_project",
+            ProjectManager.save_project,
+            project,
+        )
 
         def build_task() -> None:
             build_logger = get_logger("z_graph.build")
@@ -595,7 +789,14 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                 project.zep_graph_address = _build_zep_graph_address(
                     graph_id, project_workspace_id=project_workspace_id
                 )
-                ProjectManager.save_project(project)
+                _timed_task_call(
+                    task_manager,
+                    task_id,
+                    "step_b",
+                    "ProjectManager.save_project",
+                    ProjectManager.save_project,
+                    project,
+                )
 
                 task_manager.update_task(task_id, message="Setting Ontology", progress=15)
                 builder.set_ontology(graph_id, ontology)
@@ -628,7 +829,14 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                 graph_data = builder.get_graph_data(graph_id, include_episode_data=False)
 
                 project.status = ProjectStatus.GRAPH_COMPLETED
-                ProjectManager.save_project(project)
+                _timed_task_call(
+                    task_manager,
+                    task_id,
+                    "step_b",
+                    "ProjectManager.save_project",
+                    ProjectManager.save_project,
+                    project,
+                )
 
                 node_count = graph_data.get("node_count", 0)
                 edge_count = graph_data.get("edge_count", 0)
@@ -657,7 +865,14 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
 
                 project.status = ProjectStatus.FAILED
                 project.error = str(exc)
-                ProjectManager.save_project(project)
+                _timed_task_call(
+                    task_manager,
+                    task_id,
+                    "step_b",
+                    "ProjectManager.save_project",
+                    ProjectManager.save_project,
+                    project,
+                )
 
                 task_manager.update_task(
                     task_id,

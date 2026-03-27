@@ -15,6 +15,153 @@ const statusClass = (status) => {
   }
 };
 
+const normalizeTypeTag = (value) =>
+  String(value ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+
+const extractOntologyTypeNames = (project, key) => {
+  const items = Array.isArray(project?.ontology?.[key]) ? project.ontology[key] : [];
+  const names = [];
+  const seen = new Set();
+  for (const item of items) {
+    const normalized = normalizeTypeTag(item?.name);
+    if (!normalized) continue;
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    names.push(normalized);
+  }
+  return names;
+};
+
+function TypeTagEditor({ title, tags, onChange, placeholder, autoFocus = false, highlighted = false }) {
+  const [inputValue, setInputValue] = useState("");
+  const [editingIndex, setEditingIndex] = useState(-1);
+  const [editingValue, setEditingValue] = useState("");
+  const addInputRef = useRef(null);
+  const editInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    addInputRef.current?.focus();
+  }, [autoFocus]);
+
+  useEffect(() => {
+    if (editingIndex < 0) return;
+    editInputRef.current?.focus();
+    editInputRef.current?.select();
+  }, [editingIndex]);
+
+  const hasDuplicate = (nextValue, excludedIndex = -1) =>
+    tags.some(
+      (tag, index) =>
+        index !== excludedIndex &&
+        normalizeTypeTag(tag).toLowerCase() === normalizeTypeTag(nextValue).toLowerCase(),
+    );
+
+  const appendTag = () => {
+    const normalized = normalizeTypeTag(inputValue);
+    if (!normalized || hasDuplicate(normalized)) {
+      setInputValue("");
+      return;
+    }
+    onChange([...tags, normalized]);
+    setInputValue("");
+  };
+
+  const removeTagAt = (targetIndex) => {
+    onChange(tags.filter((_, index) => index !== targetIndex));
+  };
+
+  const beginTagEdit = (targetIndex) => {
+    setEditingIndex(targetIndex);
+    setEditingValue(tags[targetIndex] ?? "");
+  };
+
+  const commitTagEdit = () => {
+    if (editingIndex < 0) return;
+    const normalized = normalizeTypeTag(editingValue);
+    if (!normalized) {
+      removeTagAt(editingIndex);
+    } else if (!hasDuplicate(normalized, editingIndex)) {
+      const nextTags = [...tags];
+      nextTags[editingIndex] = normalized;
+      onChange(nextTags);
+    }
+    setEditingIndex(-1);
+    setEditingValue("");
+  };
+
+  const cancelTagEdit = () => {
+    setEditingIndex(-1);
+    setEditingValue("");
+  };
+
+  return (
+    <section className={`ontology-editor-section ${highlighted ? "focused" : ""}`}>
+      <h4>{title}</h4>
+      <div className="ontology-tag-editor-box" onClick={() => addInputRef.current?.focus()}>
+        {tags.map((tag, index) =>
+          editingIndex === index ? (
+            <input
+              key={`${tag}-${index}`}
+              ref={editInputRef}
+              className="ontology-tag-edit-input"
+              value={editingValue}
+              onChange={(event) => setEditingValue(event.target.value)}
+              onBlur={commitTagEdit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commitTagEdit();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelTagEdit();
+                }
+              }}
+            />
+          ) : (
+            <button
+              key={`${tag}-${index}`}
+              className="ontology-tag-chip"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                beginTagEdit(index);
+              }}
+            >
+              {tag}
+            </button>
+          ),
+        )}
+        <input
+          ref={addInputRef}
+          className="ontology-tag-input"
+          value={inputValue}
+          onChange={(event) => setInputValue(event.target.value)}
+          placeholder={placeholder}
+          onBlur={appendTag}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === ",") {
+              event.preventDefault();
+              appendTag();
+              return;
+            }
+            if (event.key === "Backspace" && !inputValue && tags.length > 0) {
+              event.preventDefault();
+              removeTagAt(tags.length - 1);
+            }
+          }}
+        />
+      </div>
+      <p className="field-note">
+        Click a tag to edit. Press Enter to save. Press Backspace on empty input to remove the last tag.
+      </p>
+    </section>
+  );
+}
+
 export default function TaskPanel() {
   const {
     state,
@@ -24,21 +171,77 @@ export default function TaskPanel() {
     setFiles,
     runOntologyGenerate,
     runGraphBuild,
+    updateProjectOntologyTypes,
     addSystemLog,
   } =
     useTaskStore();
-  const { form, ontologyTask, graphTask, systemLogs, promptLabelCatalog, viewMode } = state;
+  const { form, ontologyTask, graphTask, systemLogs, promptLabelCatalog, viewMode, currentProject } =
+    state;
   const logContainerRef = useRef(null);
   const [activeStepTab, setActiveStepTab] = useState("A");
   const [activeBackendTab, setActiveBackendTab] = useState("build");
+  const [ontologyEditorMode, setOntologyEditorMode] = useState("");
+  const [draftEntityTypeNames, setDraftEntityTypeNames] = useState([]);
+  const [draftEdgeTypeNames, setDraftEdgeTypeNames] = useState([]);
+  const [savingOntologyTypes, setSavingOntologyTypes] = useState(false);
+  const [ontologyEditorError, setOntologyEditorError] = useState("");
 
   const stepBUnlocked =
     ontologyTask.status === "success" || graphTask.status === "running" || graphTask.status === "success";
   const isProjectCreated = Boolean(form.projectId);
+  const canOpenOntologyEditor = Boolean(form.projectId) && ontologyTask.status !== "running";
+  const isEntityEditor = ontologyEditorMode === "entity";
 
   const handleOntologySubmit = async (event) => {
     event.preventDefault();
     await runOntologyGenerate();
+  };
+
+  const openOntologyEditor = (mode) => {
+    if (!canOpenOntologyEditor) {
+      addSystemLog("Ontology editor is available after Step A finishes.");
+      return;
+    }
+    setOntologyEditorMode(mode);
+    setDraftEntityTypeNames(extractOntologyTypeNames(currentProject, "entity_types"));
+    setDraftEdgeTypeNames(extractOntologyTypeNames(currentProject, "edge_types"));
+    setOntologyEditorError("");
+  };
+
+  const closeOntologyEditor = () => {
+    if (savingOntologyTypes) return;
+    setOntologyEditorMode("");
+    setOntologyEditorError("");
+  };
+
+  const confirmOntologyEditor = async () => {
+    const normalizedProjectId = String(form.projectId ?? "").trim();
+    if (!normalizedProjectId) {
+      setOntologyEditorError("Project ID is required to save ontology edits.");
+      return;
+    }
+
+    setSavingOntologyTypes(true);
+    setOntologyEditorError("");
+    try {
+      await updateProjectOntologyTypes(normalizedProjectId, {
+        entityTypeNames: draftEntityTypeNames,
+        edgeTypeNames: draftEdgeTypeNames,
+      });
+      setOntologyEditorMode("");
+    } catch (error) {
+      const message = String(error);
+      setOntologyEditorError(message);
+      addSystemLog(`Failed to update ontology types: ${message}`);
+    } finally {
+      setSavingOntologyTypes(false);
+    }
+  };
+
+  const handleOntologyStatBoxKeyDown = (event, section) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openOntologyEditor(section);
   };
 
   const handleGraphTabClick = () => {
@@ -210,11 +413,25 @@ export default function TaskPanel() {
                     <span className="stat-value">{form.projectId || "-"}</span>
                     <span className="stat-label">Project ID</span>
                   </div>
-                  <div className="stat-box">
+                  <div
+                    className={`stat-box clickable ${canOpenOntologyEditor ? "" : "disabled"}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openOntologyEditor("entity")}
+                    onKeyDown={(event) => handleOntologyStatBoxKeyDown(event, "entity")}
+                    title="Open ontology type editor"
+                  >
                     <span className="stat-value">{ontologyTask.entityTypes}</span>
                     <span className="stat-label">Entity Types</span>
                   </div>
-                  <div className="stat-box">
+                  <div
+                    className={`stat-box clickable ${canOpenOntologyEditor ? "" : "disabled"}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openOntologyEditor("relationship")}
+                    onKeyDown={(event) => handleOntologyStatBoxKeyDown(event, "relationship")}
+                    title="Open ontology type editor"
+                  >
                     <span className="stat-value">{ontologyTask.edgeTypes}</span>
                     <span className="stat-label">Relationship Types</span>
                   </div>
@@ -335,6 +552,71 @@ export default function TaskPanel() {
           </article>
         )}
       </div>
+
+      {Boolean(ontologyEditorMode) && (
+        <div className="ontology-editor-overlay" onClick={closeOntologyEditor}>
+          <article
+            className="ontology-editor-panel"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={isEntityEditor ? "Entity type editor" : "Relationship type editor"}
+          >
+            <div className="ontology-editor-head">
+              <h3>{isEntityEditor ? "Edit Entity Types" : "Edit Relationship Types"}</h3>
+              <button
+                className="ontology-editor-close"
+                type="button"
+                onClick={closeOntologyEditor}
+                disabled={savingOntologyTypes}
+                aria-label="Close ontology editor"
+              >
+                ×
+              </button>
+            </div>
+            <p className="ontology-editor-note">
+              {isEntityEditor
+                ? "Update entity type names. Existing entity metadata (description, attributes, examples) is preserved for renamed entries."
+                : "Update relationship type names. Existing relationship metadata (source-target pairs and attributes) is preserved for renamed entries."}
+            </p>
+            <div className="ontology-editor-section-list">
+              {isEntityEditor ? (
+                <TypeTagEditor
+                  title="Entity Types"
+                  tags={draftEntityTypeNames}
+                  onChange={setDraftEntityTypeNames}
+                  placeholder="Add entity type and press Enter"
+                  autoFocus
+                  highlighted
+                />
+              ) : (
+                <TypeTagEditor
+                  title="Relationship Types"
+                  tags={draftEdgeTypeNames}
+                  onChange={setDraftEdgeTypeNames}
+                  placeholder="Add relationship type and press Enter"
+                  autoFocus
+                  highlighted
+                />
+              )}
+            </div>
+            {ontologyEditorError && <p className="ontology-editor-error">{ontologyEditorError}</p>}
+            <div className="ontology-editor-actions">
+              <button
+                className="ontology-editor-cancel-btn"
+                type="button"
+                onClick={closeOntologyEditor}
+                disabled={savingOntologyTypes}
+              >
+                Cancel
+              </button>
+              <button className="action-btn" type="button" onClick={confirmOntologyEditor} disabled={savingOntologyTypes}>
+                {savingOntologyTypes ? "Saving..." : "Confirm"}
+              </button>
+            </div>
+          </article>
+        </div>
+      )}
     </section>
   );
 }

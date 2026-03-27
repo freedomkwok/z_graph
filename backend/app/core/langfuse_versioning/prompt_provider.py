@@ -48,7 +48,7 @@ def _build_labeled_prompt_name(prompt_name: str, label: str | None) -> str | Non
         return f"{normalized_label}/{parts[0]}"
 
     category = parts[0]
-    if category not in {"prompts", "sub_queries", "fallback_entites"}:
+    if category not in {"prompts", "sub_queries", "fallback_entities"}:
         return None
 
     file_name = parts[-1]
@@ -285,7 +285,7 @@ class LangfusePromptProvider(PromptProvider):
             root_candidates = (
                 "prompts",
                 "sub_queries",
-                "fallback_entites",
+                "fallback_entities",
             )
             for root in root_candidates:
                 root_path = f"{root}/{normalized_prompt_name}"

@@ -65,7 +65,9 @@ class TaskManager:
                 if error is not None:
                     task.error = error
                 if progress_detail is not None:
-                    task.progress_detail = progress_detail
+                    merged_progress_detail = dict(task.progress_detail or {})
+                    merged_progress_detail.update(progress_detail)
+                    task.progress_detail = merged_progress_detail
     
     def complete_task(self, task_id: str, result: dict):
         self.update_task(
