@@ -90,9 +90,10 @@ export default function MainLayout({ currentPage = "workspace", onNavigate }) {
     <div className="app-shell">
       <TopBar currentPage={currentPage} onNavigate={onNavigate} />
       <main className={workspaceClass} ref={workspaceRef} style={workspaceStyle}>
-        {!isGraphOnly && <TaskPanel />}
+        <TaskPanel key="task-panel" />
         {isBothMode && (
           <div
+            key="workspace-splitter"
             className="panel-splitter"
             role="separator"
             aria-orientation="vertical"
@@ -100,7 +101,7 @@ export default function MainLayout({ currentPage = "workspace", onNavigate }) {
             onPointerDown={startResize}
           />
         )}
-        {!isBackendOnly && <GraphEmbedPanel />}
+        <GraphEmbedPanel key="graph-panel" />
       </main>
     </div>
   );

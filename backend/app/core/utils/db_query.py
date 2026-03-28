@@ -219,18 +219,20 @@ def ensure_prompt_label_data(
     *,
     name: str,
     now_iso: str,
+    project_id: str | None = None,
 ) -> None:
     with _connect_postgres(connection_string) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO prompt_labels (name, created_at, updated_at)
-                VALUES (%s, %s, %s)
+                INSERT INTO prompt_labels (name, project_id, created_at, updated_at)
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT (name)
                 DO UPDATE SET
+                    project_id = COALESCE(prompt_labels.project_id, EXCLUDED.project_id),
                     updated_at = EXCLUDED.updated_at
                 """,
-                (name, now_iso, now_iso),
+                (name, project_id, now_iso, now_iso),
             )
             _refresh_prompt_label_stats(cur, now_iso)
         conn.commit()
@@ -295,6 +297,7 @@ def list_prompt_labels_data(connection_string: str) -> list[dict[str, Any]]:
                 """
                 SELECT
                     labels.name,
+                    labels.project_id,
                     labels.created_at,
                     labels.updated_at,
                     COUNT(projects.project_id)::INT AS project_count
@@ -310,9 +313,10 @@ def list_prompt_labels_data(connection_string: str) -> list[dict[str, Any]]:
     return [
         {
             "name": row[0],
-            "created_at": row[1],
-            "updated_at": row[2],
-            "project_count": row[3],
+            "project_id": row[1],
+            "created_at": row[2],
+            "updated_at": row[3],
+            "project_count": row[4],
         }
         for row in rows
     ]
@@ -342,5 +346,5 @@ def delete_prompt_label_data(connection_string: str, name: str) -> tuple[bool, s
         conn.commit()
 
     if deleted:
-        return True, f"Prompt label deleted: {name}"
-    return False, f"Prompt label not found: {name}"
+        return True, f"Category label deleted: {name}"
+    return False, f"Category label not found: {name}"

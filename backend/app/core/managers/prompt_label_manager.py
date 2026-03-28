@@ -20,6 +20,11 @@ class PromptLabelManager:
     _DEFAULT_LABELS = ("Production", "Medical")
     _PROTECTED_LABELS = {"production"}
     _LABEL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    _LABEL_TYPE_FILE_MAP = {
+        "individual": "ENTITY_EXAMPLES_IN_SYSTEM_PROMPT.md",
+        "organization": "ORGANIZATION_EXAMPLES_IN_SYSTEM_PROMPT.md",
+        "relationship": "RELATIONS_IN_SYSTEM_PROMPT.md",
+    }
     LABELS_FILE = os.path.join(Config.UPLOAD_FOLDER, "prompt_labels.json")
     PROMPT_VERSIONING_DIR = Path(__file__).resolve().parents[1] / "langfuse_versioning"
 
@@ -209,12 +214,12 @@ class PromptLabelManager:
                 normalized_name,
             )
             if existing_name is None:
-                return False, f"Prompt label not found: {normalized_name}"
+                return False, f"Category label not found: {normalized_name}"
             return delete_prompt_label_data(connection_string, existing_name)
 
         labels = cls._load_file_labels()
         if not any(item["name"].lower() == normalized_name.lower() for item in labels):
-            return False, f"Prompt label not found: {normalized_name}"
+            return False, f"Category label not found: {normalized_name}"
 
         projects = ProjectManager.list_projects(limit=10000)
         in_use = any(
@@ -226,7 +231,153 @@ class PromptLabelManager:
 
         next_labels = [item for item in labels if item["name"].lower() != normalized_name.lower()]
         cls._save_file_labels(next_labels)
-        return True, f"Prompt label deleted: {normalized_name}"
+        return True, f"Category label deleted: {normalized_name}"
+
+    @classmethod
+    def _normalize_label_folder_name(cls, label_name: str | None) -> str:
+        normalized = str(label_name or "").strip().lower()
+        return normalized or "production"
+
+    @classmethod
+    def _build_label_type_file_candidates(
+        cls,
+        *,
+        label_name: str,
+        file_name: str,
+    ) -> list[Path]:
+        normalized_label = cls._normalize_label_folder_name(label_name)
+        prompts_dir = cls.PROMPT_VERSIONING_DIR / "prompts"
+        return [
+            prompts_dir / normalized_label / file_name,
+            prompts_dir / "production" / file_name,
+            prompts_dir / file_name,
+        ]
+
+    @classmethod
+    def _parse_string_list_content(cls, value: str) -> list[str]:
+        parsed_items: list[str] = []
+        seen: set[str] = set()
+        for raw_line in str(value or "").splitlines():
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("- ") or stripped.startswith("* "):
+                stripped = stripped[2:].strip()
+            dedupe_key = stripped.lower()
+            if not stripped or dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            parsed_items.append(stripped)
+        return parsed_items
+
+    @classmethod
+    def _normalize_string_list_payload(cls, values: Any, *, field_name: str) -> list[str]:
+        if not isinstance(values, list):
+            raise ValueError(f"{field_name} must be a list of strings")
+
+        normalized_values: list[str] = []
+        seen: set[str] = set()
+        for raw_value in values:
+            normalized = str(raw_value or "").strip()
+            if not normalized:
+                continue
+            dedupe_key = normalized.lower()
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            normalized_values.append(normalized)
+        return normalized_values
+
+    @classmethod
+    def _serialize_string_list_content(cls, values: list[str]) -> str:
+        if not values:
+            return ""
+        return "\n".join(f"- {value}" for value in values) + "\n"
+
+    @classmethod
+    def _touch_label_updated_at(cls, label_name: str) -> None:
+        now_iso = datetime.now().isoformat()
+        if cls._use_postgres_storage():
+            ensure_prompt_label_data(
+                cls._get_storage_connection_string(),
+                name=label_name,
+                now_iso=now_iso,
+            )
+            return
+
+        labels = cls._load_file_labels()
+        normalized_target = label_name.lower()
+        found = False
+        for item in labels:
+            current_name = str((item or {}).get("name") or "").strip()
+            if current_name.lower() != normalized_target:
+                continue
+            item["updated_at"] = now_iso
+            found = True
+            break
+        if not found:
+            labels.append(
+                {
+                    "name": label_name,
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                    "project_count": 0,
+                }
+            )
+        cls._save_file_labels(labels)
+
+    @classmethod
+    def get_label_type_lists(cls, label_name: str) -> dict[str, Any]:
+        resolved_label = cls.ensure_label_exists(label_name)
+        resolved_types: dict[str, list[str]] = {}
+        source_paths: dict[str, str] = {}
+
+        for type_name, file_name in cls._LABEL_TYPE_FILE_MAP.items():
+            selected_source = ""
+            content = ""
+            for candidate in cls._build_label_type_file_candidates(
+                label_name=resolved_label,
+                file_name=file_name,
+            ):
+                if not candidate.exists():
+                    continue
+                content = candidate.read_text(encoding="utf-8")
+                selected_source = candidate.relative_to(cls.PROMPT_VERSIONING_DIR).as_posix()
+                break
+
+            resolved_types[type_name] = cls._parse_string_list_content(content)
+            source_paths[type_name] = selected_source
+
+        return {
+            "label_name": resolved_label,
+            "types": resolved_types,
+            "sources": source_paths,
+        }
+
+    @classmethod
+    def update_label_type_lists(cls, label_name: str, payload: Any) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be an object")
+
+        resolved_label = cls.ensure_label_exists(label_name)
+        normalized_label = cls._normalize_label_folder_name(resolved_label)
+        target_dir = cls.PROMPT_VERSIONING_DIR / "prompts" / normalized_label
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        normalized_types: dict[str, list[str]] = {}
+        for type_name in cls._LABEL_TYPE_FILE_MAP:
+            normalized_types[type_name] = cls._normalize_string_list_payload(
+                payload.get(type_name, []),
+                field_name=type_name,
+            )
+
+        for type_name, file_name in cls._LABEL_TYPE_FILE_MAP.items():
+            target_file = target_dir / file_name
+            serialized = cls._serialize_string_list_content(normalized_types[type_name])
+            target_file.write_text(serialized, encoding="utf-8")
+
+        cls._touch_label_updated_at(resolved_label)
+        return cls.get_label_type_lists(resolved_label)
 
     @classmethod
     def sync_label_from_langfuse(

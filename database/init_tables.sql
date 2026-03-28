@@ -1,6 +1,7 @@
 -- z_graph project storage schema
 CREATE TABLE IF NOT EXISTS prompt_labels (
     name TEXT PRIMARY KEY,
+    project_id TEXT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -23,6 +24,9 @@ CREATE TABLE IF NOT EXISTS projects (
     prompt_label TEXT REFERENCES prompt_labels (name)
 );
 
+ALTER TABLE prompt_labels
+ADD COLUMN IF NOT EXISTS project_id TEXT;
+
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS zep_graph_id TEXT;
 
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_workspace_id TEXT;
@@ -33,14 +37,16 @@ ALTER TABLE projects
 ADD COLUMN IF NOT EXISTS prompt_label TEXT REFERENCES prompt_labels (name);
 
 INSERT INTO
-    prompt_labels (name, created_at, updated_at)
+    prompt_labels (name, project_id, created_at, updated_at)
 VALUES (
         'Production',
+        NULL,
         NOW()::TEXT,
         NOW()::TEXT
     ),
     (
         'Medical',
+        NULL,
         NOW()::TEXT,
         NOW()::TEXT
     )
@@ -73,3 +79,5 @@ CREATE INDEX IF NOT EXISTS idx_projects_zep_graph_id ON projects (zep_graph_id);
 CREATE INDEX IF NOT EXISTS idx_projects_workspace_id ON projects (project_workspace_id);
 
 CREATE INDEX IF NOT EXISTS idx_projects_prompt_label ON projects (prompt_label);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_labels_project_id ON prompt_labels (project_id);

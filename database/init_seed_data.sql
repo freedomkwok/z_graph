@@ -3,11 +3,12 @@
 
 BEGIN;
 
-INSERT INTO prompt_labels (name, created_at, updated_at)
+INSERT INTO prompt_labels (name, project_id, created_at, updated_at)
 VALUES
-  ('Medical', '2026-03-23 20:55:33.501249+00', '2026-03-25T02:23:20.801433'),
-  ('Production', '2026-03-23 20:55:33.501249+00', '2026-03-25T02:23:20.801433')
+  ('Medical', NULL, '2026-03-23 20:55:33.501249+00', '2026-03-25T02:23:20.801433'),
+  ('Production', NULL, '2026-03-23 20:55:33.501249+00', '2026-03-25T02:23:20.801433')
 ON CONFLICT (name) DO UPDATE SET
+  project_id = EXCLUDED.project_id,
   created_at = EXCLUDED.created_at,
   updated_at = EXCLUDED.updated_at;
 

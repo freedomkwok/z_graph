@@ -21,6 +21,7 @@ const TYPE_COLORS = [
   "#27AE60",
   "#F39C12",
 ];
+const GRAPH_DATA_CACHE = new Map();
 
 function withApiBase(path) {
   return `${API_BASE_URL}${path}`;
@@ -71,6 +72,10 @@ function buildGraphDataApiPath(graphId, projectWorkspaceId) {
     params.set("project_workspace_id", normalizedWorkspaceId);
   }
   return `/api/data/${encodeURIComponent(String(graphId ?? "").trim())}?${params.toString()}`;
+}
+
+function buildGraphCacheKey(graphId, projectWorkspaceId) {
+  return `${String(graphId ?? "").trim()}::${String(projectWorkspaceId ?? "").trim()}`;
 }
 
 function getEntityType(node) {
@@ -146,6 +151,7 @@ export default function GraphEmbedPanel() {
     state.form?.projectId,
   );
   const graphUrl = resolveGraphEmbedUrl(state.currentProject);
+  const graphCacheKey = buildGraphCacheKey(graphId, projectWorkspaceId);
 
   const containerRef = useRef(null);
   const svgRef = useRef(null);
@@ -155,7 +161,6 @@ export default function GraphEmbedPanel() {
   const addSystemLogRef = useRef(addSystemLog);
   const fetchInFlightRef = useRef(false);
   const previousGraphTaskStatusRef = useRef(state.graphTask.status);
-  const graphDataCacheRef = useRef(new Map());
   const [graphData, setGraphData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -318,7 +323,7 @@ export default function GraphEmbedPanel() {
           throw new Error(payload?.error ?? "Failed to fetch graph data");
         }
         const nextGraphData = payload.data ?? null;
-        graphDataCacheRef.current.set(graphId, nextGraphData);
+        GRAPH_DATA_CACHE.set(graphCacheKey, nextGraphData);
         setGraphData(nextGraphData);
         setError("");
         if (!silent) {
@@ -336,7 +341,7 @@ export default function GraphEmbedPanel() {
         if (!silent) setLoading(false);
       }
     },
-    [graphId, projectWorkspaceId],
+    [graphCacheKey, graphId, projectWorkspaceId],
   );
 
   useEffect(() => {
@@ -355,8 +360,8 @@ export default function GraphEmbedPanel() {
       return;
     }
 
-    if (graphDataCacheRef.current.has(graphId)) {
-      setGraphData(graphDataCacheRef.current.get(graphId) ?? null);
+    if (GRAPH_DATA_CACHE.has(graphCacheKey)) {
+      setGraphData(GRAPH_DATA_CACHE.get(graphCacheKey) ?? null);
       setError("");
       setLoading(false);
       return;
@@ -366,7 +371,7 @@ export default function GraphEmbedPanel() {
     setError("");
     setLoading(false);
     fetchGraphData();
-  }, [fetchGraphData, graphId]);
+  }, [fetchGraphData, graphCacheKey, graphId]);
 
   useEffect(() => {
     // Auto-refresh only after a graph build finishes.

@@ -237,7 +237,7 @@ def create_prompt_label(data: ProjectPatchBody) -> Any:
         label = PromptLabelManager.create_label(str(name or ""))
         return {
             "success": True,
-            "message": f"Prompt label saved: {label['name']}",
+            "message": f"Category label saved: {label['name']}",
             "data": label,
         }
     except Exception as exc:
@@ -261,11 +261,39 @@ def sync_prompt_label_from_langfuse(label_name: str) -> Any:
         result = PromptLabelManager.sync_label_from_langfuse(label_name)
         return {
             "success": True,
-            "message": f"Prompt label synced from Langfuse: {result.get('requested_label')}",
+            "message": f"Category label synced from Langfuse: {result.get('requested_label')}",
             "data": result,
         }
     except Exception as exc:
-        logger.exception("Prompt label sync from Langfuse failed")
+        logger.exception("Category label sync from Langfuse failed")
+        return _error_response(500, str(exc), exc)
+
+
+@router.get("/prompt-label/{label_name}/types")
+def get_prompt_label_types(label_name: str) -> Any:
+    try:
+        data = PromptLabelManager.get_label_type_lists(label_name)
+        return {
+            "success": True,
+            "data": data,
+        }
+    except Exception as exc:
+        return _error_response(400, str(exc), exc)
+
+
+@router.patch("/prompt-label/{label_name}/types")
+def update_prompt_label_types(label_name: str, data: ProjectPatchBody) -> Any:
+    try:
+        result = PromptLabelManager.update_label_type_lists(label_name, data)
+        return {
+            "success": True,
+            "message": f"Category label type lists updated: {result.get('label_name')}",
+            "data": result,
+        }
+    except ValueError as exc:
+        return _error_response(400, str(exc))
+    except Exception as exc:
+        logger.exception("Category label type update failed")
         return _error_response(500, str(exc), exc)
 
 

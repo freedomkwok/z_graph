@@ -356,6 +356,8 @@ export function TaskStoreProvider({ children }) {
     createPromptLabel: promptLabelActions.createPromptLabel,
     deletePromptLabel: promptLabelActions.deletePromptLabel,
     syncPromptLabelFromLangfuse: promptLabelActions.syncPromptLabelFromLangfuse,
+    getPromptLabelTypeLists: promptLabelActions.getPromptLabelTypeLists,
+    updatePromptLabelTypeLists: promptLabelActions.updatePromptLabelTypeLists,
     setProjectPromptLabel: projectActions.setProjectPromptLabel,
     setFiles,
     switchProject: projectActions.switchProject,

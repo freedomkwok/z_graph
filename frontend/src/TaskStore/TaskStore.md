@@ -4,7 +4,7 @@ This folder contains the frontend global task/project store used by:
 
 - Step A (ontology generation)
 - Step B (graph build)
-- Project + prompt label management
+- Project + category label management
 - System Dashboard logs + task polling
 
 `frontend/src/taskStore.jsx` has been removed. Import from `frontend/src/TaskStore/index.js`.
@@ -17,7 +17,7 @@ This folder contains the frontend global task/project store used by:
   - Contains polling effects:
     - ontology task polling (`/api/task/:taskId`)
     - graph task polling (`/api/task/:taskId`)
-    - initial boot effect (health + prompt labels + projects)
+    - initial boot effect (health + category labels + projects)
   - Function to append latency events to dashboard logs.
 
 - `state.js`
@@ -42,14 +42,14 @@ This folder contains the frontend global task/project store used by:
 - `utils.js`
   - Shared utility helpers:
     - ID/number normalization
-    - prompt label fallback resolver
+    - category label fallback resolver
     - API JSON parsing helper
     - graph data URL builder
     - ontology type normalization and merge logic
       (`buildUpdatedOntologyFromTypeNames`)
 
 - `actions/promptLabelActions.js`
-  - Prompt label APIs:
+  - Category label APIs:
     - list/create/delete labels
     - sync label from Langfuse
 
@@ -58,7 +58,7 @@ This folder contains the frontend global task/project store used by:
     - switch/fetch/refresh projects
     - update project name
     - delete project
-    - update project prompt label
+    - update project category label
     - persist edited ontology types (`updateProjectOntologyTypes`)
 
 - `actions/ontologyActions.js`
@@ -90,7 +90,7 @@ Exposed from `useTaskStore()`:
   - `setFiles`
   - `addSystemLog`
 
-- **Prompt label actions**
+- **Category label actions**
   - `fetchPromptLabels`
   - `createPromptLabel`
   - `deletePromptLabel`

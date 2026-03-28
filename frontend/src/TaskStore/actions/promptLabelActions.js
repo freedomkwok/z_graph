@@ -10,7 +10,7 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
       const response = await fetch(withApiBase("/api/prompt-label/list"));
       const payload = await response.json();
       if (!response.ok || !payload?.success) {
-        throw new Error(payload?.error ?? "Failed to list prompt labels");
+        throw new Error(payload?.error ?? "Failed to list category labels");
       }
 
       const labels = Array.isArray(payload?.data) ? payload.data : [];
@@ -53,11 +53,11 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     });
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
-      throw new Error(payload?.error ?? "Failed to create prompt label");
+      throw new Error(payload?.error ?? "Failed to create category label");
     }
 
     await fetchPromptLabels({ syncFormLabel: false });
-    addSystemLog(`Prompt label saved: ${payload?.data?.name ?? normalizedName}`);
+    addSystemLog(`Category label saved: ${payload?.data?.name ?? normalizedName}`);
     return payload?.data;
   };
 
@@ -72,7 +72,7 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     });
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
-      throw new Error(payload?.error ?? "Failed to delete prompt label");
+      throw new Error(payload?.error ?? "Failed to delete category label");
     }
 
     const labels = await fetchPromptLabels({ syncFormLabel: false });
@@ -80,7 +80,7 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     if (nextPromptLabel !== state.form.promptLabel) {
       setFormField("promptLabel", nextPromptLabel);
     }
-    addSystemLog(`Prompt label deleted: ${normalizedName}`);
+    addSystemLog(`Category label deleted: ${normalizedName}`);
     return true;
   };
 
@@ -102,8 +102,50 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     await fetchPromptLabels({ syncFormLabel: false });
     const downloadedFiles = Number(payload?.data?.downloaded_files ?? 0);
     addSystemLog(
-      `Prompt label synced from Langfuse: ${normalizedName} (${downloadedFiles} file${downloadedFiles === 1 ? "" : "s"})`,
+      `Category label synced from Langfuse: ${normalizedName} (${downloadedFiles} file${downloadedFiles === 1 ? "" : "s"})`,
     );
+    return payload?.data;
+  };
+
+  const getPromptLabelTypeLists = async (name) => {
+    const normalizedName = String(name ?? "").trim();
+    if (!normalizedName) {
+      throw new Error("Label name is required");
+    }
+
+    const response = await fetch(
+      withApiBase(`/api/prompt-label/${encodeURIComponent(normalizedName)}/types`),
+    );
+    const payload = await response.json();
+    if (!response.ok || !payload?.success) {
+      throw new Error(payload?.error ?? "Failed to load category label type lists");
+    }
+    return payload?.data;
+  };
+
+  const updatePromptLabelTypeLists = async (name, typeLists) => {
+    const normalizedName = String(name ?? "").trim();
+    if (!normalizedName) {
+      throw new Error("Label name is required");
+    }
+
+    const response = await fetch(
+      withApiBase(`/api/prompt-label/${encodeURIComponent(normalizedName)}/types`),
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          individual: Array.isArray(typeLists?.individual) ? typeLists.individual : [],
+          organization: Array.isArray(typeLists?.organization) ? typeLists.organization : [],
+          relationship: Array.isArray(typeLists?.relationship) ? typeLists.relationship : [],
+        }),
+      },
+    );
+    const payload = await response.json();
+    if (!response.ok || !payload?.success) {
+      throw new Error(payload?.error ?? "Failed to update category label type lists");
+    }
+    addSystemLog(`Category label type lists updated: ${normalizedName}`);
     return payload?.data;
   };
 
@@ -112,6 +154,8 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     createPromptLabel,
     deletePromptLabel,
     syncPromptLabelFromLangfuse,
+    getPromptLabelTypeLists,
+    updatePromptLabelTypeLists,
   };
 }
 

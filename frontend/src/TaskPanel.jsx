@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import EditableStringListEditor from "./components/EditableStringListEditor";
+import TagChip from "./components/TagChip";
 import { useTaskStore } from "./TaskStore/index";
 
 const statusClass = (status) => {
@@ -115,6 +117,26 @@ const normalizeDraftTypeNames = (values) => {
   return nextNames;
 };
 
+const createEmptyPromptLabelTypeLists = () => ({
+  individual: [],
+  organization: [],
+  relationship: [],
+});
+
+const normalizePromptLabelTypeListValues = (values) => {
+  const nextValues = [];
+  const seen = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const normalized = String(value ?? "").trim();
+    if (!normalized) continue;
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    nextValues.push(normalized);
+  }
+  return nextValues;
+};
+
 const pickDraftDefinitionByName = (definitionsByName, usedIndexes, name) => {
   const candidates = definitionsByName.get(normalizeTypeKey(name)) ?? [];
   for (const candidate of candidates) {
@@ -200,17 +222,15 @@ function TypeTagEditor({ title, tags, onChange, onOpenProperties, placeholder, a
       <h4>{title}</h4>
       <div className="ontology-tag-editor-box" onClick={() => addInputRef.current?.focus()}>
         {tags.map((tag, index) => (
-          <button
+          <TagChip
             key={`${tag}-${index}`}
-            className="ontology-tag-chip"
-            type="button"
+            label={tag}
+            mainButtonClassName="ontology-tag-chip"
             onClick={(event) => {
               event.stopPropagation();
               onOpenProperties(index);
             }}
-          >
-            {tag}
-          </button>
+          />
         ))}
         <input
           ref={addInputRef}
@@ -239,122 +259,7 @@ function TypeTagEditor({ title, tags, onChange, onOpenProperties, placeholder, a
   );
 }
 
-function EditableStringListEditor({ title, values = [], onChange, placeholder }) {
-  const [inputValue, setInputValue] = useState("");
-  const [editingIndex, setEditingIndex] = useState(-1);
-  const [editingValue, setEditingValue] = useState("");
-  const addInputRef = useRef(null);
-  const editInputRef = useRef(null);
-
-  useEffect(() => {
-    if (editingIndex < 0) return;
-    editInputRef.current?.focus();
-    editInputRef.current?.select();
-  }, [editingIndex]);
-
-  const hasDuplicate = (nextValue, excludedIndex = -1) =>
-    values.some(
-      (item, index) =>
-        index !== excludedIndex &&
-        String(item ?? "").trim().toLowerCase() === String(nextValue ?? "").trim().toLowerCase(),
-    );
-
-  const appendValue = () => {
-    const normalized = String(inputValue ?? "").trim();
-    if (!normalized || hasDuplicate(normalized)) {
-      setInputValue("");
-      return;
-    }
-    onChange([...(Array.isArray(values) ? values : []), normalized]);
-    setInputValue("");
-  };
-
-  const removeValueAt = (targetIndex) => {
-    onChange((Array.isArray(values) ? values : []).filter((_, index) => index !== targetIndex));
-  };
-
-  const beginEdit = (targetIndex) => {
-    setEditingIndex(targetIndex);
-    setEditingValue(values[targetIndex] ?? "");
-  };
-
-  const commitEdit = () => {
-    if (editingIndex < 0) return;
-    const normalized = String(editingValue ?? "").trim();
-    if (!normalized) {
-      removeValueAt(editingIndex);
-    } else if (!hasDuplicate(normalized, editingIndex)) {
-      const nextValues = [...values];
-      nextValues[editingIndex] = normalized;
-      onChange(nextValues);
-    }
-    setEditingIndex(-1);
-    setEditingValue("");
-  };
-
-  return (
-    <section className="ontology-property-section">
-      <h5>{title}</h5>
-      <div className="ontology-string-list" onClick={() => addInputRef.current?.focus()}>
-        {(Array.isArray(values) ? values : []).map((value, index) =>
-          editingIndex === index ? (
-            <input
-              key={`${value}-${index}`}
-              ref={editInputRef}
-              className="ontology-string-edit-input"
-              value={editingValue}
-              onChange={(event) => setEditingValue(event.target.value)}
-              onBlur={commitEdit}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  commitEdit();
-                } else if (event.key === "Escape") {
-                  event.preventDefault();
-                  setEditingIndex(-1);
-                  setEditingValue("");
-                }
-              }}
-            />
-          ) : (
-            <button
-              key={`${value}-${index}`}
-              className="ontology-string-chip"
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                beginEdit(index);
-              }}
-            >
-              * {value}
-            </button>
-          ),
-        )}
-        <input
-          ref={addInputRef}
-          className="ontology-string-input"
-          value={inputValue}
-          onChange={(event) => setInputValue(event.target.value)}
-          placeholder={placeholder}
-          onBlur={appendValue}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === ",") {
-              event.preventDefault();
-              appendValue();
-              return;
-            }
-            if (event.key === "Backspace" && !inputValue && values.length > 0) {
-              event.preventDefault();
-              removeValueAt(values.length - 1);
-            }
-          }}
-        />
-      </div>
-    </section>
-  );
-}
-
-function JsonListEditor({ title, values = [], onChange, invalidIndexes = [], addLabel }) {
+function JsonListEditor({ values = [], onChange, invalidIndexes = [], addLabel }) {
   const invalidSet = new Set(Array.isArray(invalidIndexes) ? invalidIndexes : []);
 
   const updateItem = (index, nextValue) => {
@@ -372,11 +277,10 @@ function JsonListEditor({ title, values = [], onChange, invalidIndexes = [], add
   };
 
   return (
-    <section className="ontology-property-section">
-      <h5>{title}</h5>
+    <div>
       <div className="ontology-json-list">
         {(Array.isArray(values) ? values : []).map((value, index) => (
-          <div className="ontology-json-item" key={`${title}-${index}`}>
+          <div className="ontology-json-item" key={`${addLabel}-${index}`}>
             <textarea
               className={`ontology-json-item-input ${invalidSet.has(index) ? "invalid" : ""}`}
               value={String(value ?? "")}
@@ -401,7 +305,7 @@ function JsonListEditor({ title, values = [], onChange, invalidIndexes = [], add
       <button className="ontology-json-add-btn" type="button" onClick={appendItem}>
         {addLabel}
       </button>
-    </section>
+    </div>
   );
 }
 
@@ -411,6 +315,10 @@ export default function TaskPanel() {
     setViewMode,
     setFormField,
     setProjectPromptLabel,
+    fetchPromptLabels,
+    syncPromptLabelFromLangfuse,
+    getPromptLabelTypeLists,
+    updatePromptLabelTypeLists,
     setFiles,
     runOntologyGenerate,
     runGraphBuild,
@@ -421,6 +329,7 @@ export default function TaskPanel() {
   const { form, ontologyTask, graphTask, systemLogs, promptLabelCatalog, viewMode, currentProject } =
     state;
   const logContainerRef = useRef(null);
+  const promptLabelDropdownRef = useRef(null);
   const [activeStepTab, setActiveStepTab] = useState("A");
   const [activeBackendTab, setActiveBackendTab] = useState("build");
   const [ontologyEditorMode, setOntologyEditorMode] = useState("");
@@ -437,6 +346,17 @@ export default function TaskPanel() {
   });
   const [savingOntologyTypes, setSavingOntologyTypes] = useState(false);
   const [ontologyEditorError, setOntologyEditorError] = useState("");
+  const [promptLabelEditor, setPromptLabelEditor] = useState({
+    open: false,
+    labelName: "",
+    loadingTypes: false,
+    savingTypes: false,
+    typeLists: createEmptyPromptLabelTypeLists(),
+    syncing: false,
+    notice: "",
+    error: "",
+  });
+  const [promptLabelDropdownOpen, setPromptLabelDropdownOpen] = useState(false);
 
   const stepBUnlocked =
     ontologyTask.status === "success" || graphTask.status === "running" || graphTask.status === "success";
@@ -446,10 +366,152 @@ export default function TaskPanel() {
   const draftEntityTypeNames = draftEntityTypes.map((item) => normalizeTypeTag(item?.name)).filter(Boolean);
   const draftEdgeTypeNames = draftEdgeTypes.map((item) => normalizeTypeTag(item?.name)).filter(Boolean);
   const isTypePropertyEditorOpen = Boolean(typePropertyEditor.open);
+  const promptLabelItems =
+    promptLabelCatalog.items.length > 0
+      ? promptLabelCatalog.items
+      : [{ name: form.promptLabel || "Production" }];
 
   const handleOntologySubmit = async (event) => {
     event.preventDefault();
     await runOntologyGenerate();
+  };
+
+  const openPromptLabelEditor = (labelName) => {
+    const normalized = String(labelName ?? "").trim();
+    if (!normalized) return;
+    setPromptLabelDropdownOpen(false);
+    setPromptLabelEditor({
+      open: true,
+      labelName: normalized,
+      loadingTypes: true,
+      savingTypes: false,
+      typeLists: createEmptyPromptLabelTypeLists(),
+      syncing: false,
+      notice: "",
+      error: "",
+    });
+  };
+
+  const closePromptLabelEditor = () => {
+    if (promptLabelEditor.syncing || promptLabelEditor.savingTypes) return;
+    setPromptLabelEditor({
+      open: false,
+      labelName: "",
+      loadingTypes: false,
+      savingTypes: false,
+      typeLists: createEmptyPromptLabelTypeLists(),
+      syncing: false,
+      notice: "",
+      error: "",
+    });
+  };
+
+  const updatePromptLabelTypeListDraft = (typeName, nextValues) => {
+    if (!["individual", "organization", "relationship"].includes(typeName)) {
+      return;
+    }
+    setPromptLabelEditor((current) => ({
+      ...current,
+      typeLists: {
+        ...current.typeLists,
+        [typeName]: normalizePromptLabelTypeListValues(nextValues),
+      },
+      notice: "",
+      error: "",
+    }));
+  };
+
+  const syncPromptLabelContent = async () => {
+    const labelName = String(promptLabelEditor.labelName ?? "").trim();
+    if (!labelName) {
+      setPromptLabelEditor((current) => ({
+        ...current,
+        error: "Label name is required.",
+        notice: "",
+      }));
+      return;
+    }
+
+    setPromptLabelEditor((current) => ({
+      ...current,
+      syncing: true,
+      error: "",
+      notice: "",
+    }));
+    try {
+      const syncResult = await syncPromptLabelFromLangfuse(labelName);
+      const typeResult = await getPromptLabelTypeLists(labelName);
+      await fetchPromptLabels({ syncFormLabel: false });
+      const downloadedFiles = Number(syncResult?.downloaded_files ?? 0);
+      setPromptLabelEditor((current) => ({
+        ...current,
+        syncing: false,
+        loadingTypes: false,
+        typeLists: {
+          individual: normalizePromptLabelTypeListValues(typeResult?.types?.individual),
+          organization: normalizePromptLabelTypeListValues(typeResult?.types?.organization),
+          relationship: normalizePromptLabelTypeListValues(typeResult?.types?.relationship),
+        },
+        error: "",
+        notice: `Updated '${labelName}' from Langfuse (${downloadedFiles} file${downloadedFiles === 1 ? "" : "s"}).`,
+      }));
+    } catch (error) {
+      setPromptLabelEditor((current) => ({
+        ...current,
+        syncing: false,
+        loadingTypes: false,
+        notice: "",
+        error: String(error),
+      }));
+    }
+  };
+
+  const savePromptLabelTypeLists = async () => {
+    const labelName = String(promptLabelEditor.labelName ?? "").trim();
+    if (!labelName) {
+      setPromptLabelEditor((current) => ({
+        ...current,
+        error: "Label name is required.",
+        notice: "",
+      }));
+      return;
+    }
+
+    const payload = {
+      individual: normalizePromptLabelTypeListValues(promptLabelEditor.typeLists?.individual),
+      organization: normalizePromptLabelTypeListValues(promptLabelEditor.typeLists?.organization),
+      relationship: normalizePromptLabelTypeListValues(promptLabelEditor.typeLists?.relationship),
+    };
+
+    setPromptLabelEditor((current) => ({
+      ...current,
+      savingTypes: true,
+      error: "",
+      notice: "",
+    }));
+    try {
+      const result = await updatePromptLabelTypeLists(labelName, payload);
+      await fetchPromptLabels({ syncFormLabel: false });
+      setPromptLabelEditor((current) => ({
+        ...current,
+        savingTypes: false,
+        loadingTypes: false,
+        typeLists: {
+          individual: normalizePromptLabelTypeListValues(result?.types?.individual),
+          organization: normalizePromptLabelTypeListValues(result?.types?.organization),
+          relationship: normalizePromptLabelTypeListValues(result?.types?.relationship),
+        },
+        error: "",
+        notice: `Saved '${labelName}' label type lists.`,
+      }));
+    } catch (error) {
+      setPromptLabelEditor((current) => ({
+        ...current,
+        savingTypes: false,
+        notice: "",
+        error: String(error),
+      }));
+    }
   };
 
   const closeTypePropertyEditor = () => {
@@ -692,6 +754,107 @@ export default function TaskPanel() {
   };
 
   useEffect(() => {
+    if (!promptLabelDropdownOpen) return undefined;
+
+    const onPointerDown = (event) => {
+      if (!promptLabelDropdownRef.current?.contains(event.target)) {
+        setPromptLabelDropdownOpen(false);
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setPromptLabelDropdownOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [promptLabelDropdownOpen]);
+
+  useEffect(() => {
+    const labelName = String(promptLabelEditor.labelName ?? "").trim();
+    if (!promptLabelEditor.open || !labelName) return undefined;
+
+    let cancelled = false;
+    setPromptLabelEditor((current) => ({
+      ...current,
+      loadingTypes: true,
+      error: "",
+    }));
+
+    getPromptLabelTypeLists(labelName)
+      .then((result) => {
+        if (cancelled) return;
+        setPromptLabelEditor((current) => {
+          const currentLabel = String(current.labelName ?? "").trim().toLowerCase();
+          if (!current.open || currentLabel !== labelName.toLowerCase()) {
+            return current;
+          }
+          return {
+            ...current,
+            loadingTypes: false,
+            typeLists: {
+              individual: normalizePromptLabelTypeListValues(result?.types?.individual),
+              organization: normalizePromptLabelTypeListValues(result?.types?.organization),
+              relationship: normalizePromptLabelTypeListValues(result?.types?.relationship),
+            },
+          };
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setPromptLabelEditor((current) => ({
+          ...current,
+          loadingTypes: false,
+          error: String(error),
+        }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [promptLabelEditor.open, promptLabelEditor.labelName]);
+
+  useEffect(() => {
+    if (!isTypePropertyEditorOpen && !promptLabelEditor.open && !Boolean(ontologyEditorMode)) {
+      return undefined;
+    }
+
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+
+      if (isTypePropertyEditorOpen) {
+        closeTypePropertyEditor();
+        return;
+      }
+      if (promptLabelEditor.open) {
+        closePromptLabelEditor();
+        return;
+      }
+      if (ontologyEditorMode) {
+        closeOntologyEditor();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [
+    isTypePropertyEditorOpen,
+    promptLabelEditor.open,
+    promptLabelEditor.syncing,
+    promptLabelEditor.savingTypes,
+    ontologyEditorMode,
+    savingOntologyTypes,
+  ]);
+
+  useEffect(() => {
     if (!logContainerRef.current) return;
     logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
   }, [systemLogs.length, activeBackendTab]);
@@ -709,6 +872,11 @@ export default function TaskPanel() {
     typePropertyEditor.mode === "entity"
       ? "Edit name, description, metadata string list, and attribute JSON payloads."
       : "Edit name, description, attribute JSON payloads, and source-target JSON payloads.";
+  const editingPromptLabelMeta = promptLabelCatalog.items.find(
+    (item) =>
+      String(item?.name ?? "").trim().toLowerCase() ===
+      String(promptLabelEditor.labelName ?? "").trim().toLowerCase(),
+  );
 
   return (
     <section className="right-panel">
@@ -811,23 +979,65 @@ export default function TaskPanel() {
                   </label>
 
                   <label className="field">
-                    <span>Prompt Category</span>
-                    <select
-                      value={form.promptLabel}
-                      onChange={(event) => setProjectPromptLabel(event.target.value)}
-                    >
-                      {promptLabelCatalog.items.length === 0 ? (
-                        <option value={form.promptLabel || "Production"}>
-                          {form.promptLabel || "Production"}
-                        </option>
-                      ) : (
-                        promptLabelCatalog.items.map((item) => (
-                          <option key={item.name} value={item.name}>
-                            {item.name}
-                          </option>
-                        ))
+                    <span>Category Label</span>
+                    <div className="label-dropdown" ref={promptLabelDropdownRef}>
+                      <button
+                        className={`label-dropdown-trigger ${promptLabelDropdownOpen ? "open" : ""}`}
+                        type="button"
+                        onClick={() => setPromptLabelDropdownOpen((current) => !current)}
+                        aria-haspopup="listbox"
+                        aria-expanded={promptLabelDropdownOpen}
+                      >
+                        <span>{form.promptLabel || "Production"}</span>
+                        <span className="label-dropdown-caret" aria-hidden="true">
+                          ▾
+                        </span>
+                      </button>
+                      {promptLabelDropdownOpen && (
+                        <div className="label-dropdown-menu" role="listbox" aria-label="Category Label options">
+                          {promptLabelItems
+                            .filter((item) => String(item?.name ?? "").trim())
+                            .map((item) => {
+                              const labelName = String(item?.name ?? "").trim();
+                              const isSelected =
+                                String(form.promptLabel ?? "").trim().toLowerCase() ===
+                                labelName.toLowerCase();
+                              return (
+                                <div
+                                  className={`label-dropdown-item ${isSelected ? "selected" : ""}`}
+                                  key={labelName}
+                                  role="option"
+                                  aria-selected={isSelected}
+                                >
+                                  <button
+                                    className="label-dropdown-item-main"
+                                    type="button"
+                                    onClick={() => {
+                                      setProjectPromptLabel(labelName);
+                                      setPromptLabelDropdownOpen(false);
+                                    }}
+                                    title={labelName}
+                                  >
+                                    <span className="label-dropdown-item-name">{labelName}</span>
+                                    {isSelected && (
+                                      <span className="label-dropdown-item-selected">Selected</span>
+                                    )}
+                                  </button>
+                                  <button
+                                    className="label-dropdown-item-edit"
+                                    type="button"
+                                    onClick={() => openPromptLabelEditor(labelName)}
+                                    aria-label={`Edit label ${labelName}`}
+                                    title={`Edit label ${labelName}`}
+                                  >
+                                    ✎
+                                  </button>
+                                </div>
+                              );
+                            })}
+                        </div>
                       )}
-                    </select>
+                    </div>
                     <p className="field-note">
                       Prompt resolution tries selected label first, then Production, then local prompt file.
                     </p>
@@ -1000,6 +1210,139 @@ export default function TaskPanel() {
         )}
       </div>
 
+      {promptLabelEditor.open && (
+        <div className="prompt-label-editor-overlay">
+          <article
+            className="prompt-label-editor-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Category label editor"
+          >
+            <div className="ontology-editor-head">
+              <h3>Edit Label</h3>
+              <button
+                className="ontology-editor-close"
+                type="button"
+                onClick={closePromptLabelEditor}
+                disabled={promptLabelEditor.syncing || promptLabelEditor.savingTypes}
+                aria-label="Close category label editor"
+              >
+                ×
+              </button>
+            </div>
+            <div className="prompt-label-editor-top-meta">
+              <div className="prompt-label-editor-meta-card">
+                <span className="prompt-label-editor-meta-label">Used By Projects</span>
+                <span className="prompt-label-editor-meta-number">
+                  {Number(editingPromptLabelMeta?.project_count ?? 0)}
+                </span>
+              </div>
+              <div className="prompt-label-editor-meta-card">
+                <span className="prompt-label-editor-meta-label">Updated At</span>
+                <span className="prompt-label-editor-meta-value">
+                  {editingPromptLabelMeta?.updated_at ?? "-"}
+                </span>
+              </div>
+            </div>
+            <p className="ontology-editor-note">
+              Edit list values for this label. Sync from Langfuse to refresh local templates.
+            </p>
+            <div className="ontology-property-body">
+              <div className="ontology-property-row ontology-inline-field">
+                <span className="ontology-property-row-label">Label Name:</span>
+                <div className="ontology-property-row-editor">
+                  <input value={promptLabelEditor.labelName} readOnly />
+                </div>
+              </div>
+
+              {promptLabelEditor.loadingTypes && (
+                <p className="field-note">Loading label types...</p>
+              )}
+
+              <div className="ontology-property-row align-top">
+                <span className="ontology-property-row-label">Individual:</span>
+                <div className="ontology-property-row-editor">
+                  <EditableStringListEditor
+                    values={promptLabelEditor.typeLists?.individual ?? []}
+                    onChange={(nextValues) => updatePromptLabelTypeListDraft("individual", nextValues)}
+                    placeholder="Add individual type and press Enter"
+                    disabled={
+                      promptLabelEditor.loadingTypes ||
+                      promptLabelEditor.syncing ||
+                      promptLabelEditor.savingTypes
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="ontology-property-row align-top">
+                <span className="ontology-property-row-label">Organization:</span>
+                <div className="ontology-property-row-editor">
+                  <EditableStringListEditor
+                    values={promptLabelEditor.typeLists?.organization ?? []}
+                    onChange={(nextValues) => updatePromptLabelTypeListDraft("organization", nextValues)}
+                    placeholder="Add organization type and press Enter"
+                    disabled={
+                      promptLabelEditor.loadingTypes ||
+                      promptLabelEditor.syncing ||
+                      promptLabelEditor.savingTypes
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="ontology-property-row align-top">
+                <span className="ontology-property-row-label">Relationship:</span>
+                <div className="ontology-property-row-editor">
+                  <EditableStringListEditor
+                    values={promptLabelEditor.typeLists?.relationship ?? []}
+                    onChange={(nextValues) => updatePromptLabelTypeListDraft("relationship", nextValues)}
+                    placeholder="Add relationship type and press Enter"
+                    disabled={
+                      promptLabelEditor.loadingTypes ||
+                      promptLabelEditor.syncing ||
+                      promptLabelEditor.savingTypes
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+            {promptLabelEditor.notice && <p className="status-line">{promptLabelEditor.notice}</p>}
+            {promptLabelEditor.error && <p className="ontology-editor-error">{promptLabelEditor.error}</p>}
+            <div className="ontology-editor-actions">
+              <button
+                className="ontology-editor-cancel-btn"
+                type="button"
+                onClick={closePromptLabelEditor}
+                disabled={promptLabelEditor.syncing || promptLabelEditor.savingTypes}
+              >
+                Cancel
+              </button>
+              <button
+                className="ontology-editor-cancel-btn"
+                type="button"
+                onClick={syncPromptLabelContent}
+                disabled={promptLabelEditor.syncing || promptLabelEditor.savingTypes}
+              >
+                {promptLabelEditor.syncing ? "Syncing..." : "Sync from Langfuse"}
+              </button>
+              <button
+                className="action-btn"
+                type="button"
+                onClick={savePromptLabelTypeLists}
+                disabled={
+                  promptLabelEditor.loadingTypes ||
+                  promptLabelEditor.syncing ||
+                  promptLabelEditor.savingTypes
+                }
+              >
+                {promptLabelEditor.savingTypes ? "Saving..." : "Save Types"}
+              </button>
+            </div>
+          </article>
+        </div>
+      )}
+
       {Boolean(ontologyEditorMode) && (
         <div className="ontology-editor-overlay">
           <article
@@ -1094,60 +1437,76 @@ export default function TaskPanel() {
               </button>
             </div>
             <p className="ontology-editor-note">{typePropertyDescription}</p>
-            <div className="ontology-property-body ontology-property-grid">
-              <div className="ontology-property-col">
-                <div className="ontology-inline-field">
-                  <span className="ontology-inline-label">Type Name:</span>
+            <div className="ontology-property-body">
+              <div className="ontology-property-row ontology-inline-field">
+                <span className="ontology-property-row-label">Type Name:</span>
+                <div className="ontology-property-row-editor">
                   <input
                     value={String(typePropertyDraft.name ?? "")}
                     onChange={(event) => updateTypePropertyDraftField("name", event.target.value)}
                     placeholder="Type name"
                   />
                 </div>
+              </div>
 
-                <label className="field">
-                  <span>Description</span>
+              <div className="ontology-property-row align-top">
+                <span className="ontology-property-row-label">Description:</span>
+                <div className="ontology-property-row-editor">
                   <textarea
                     value={String(typePropertyDraft.description ?? "")}
                     onChange={(event) => updateTypePropertyDraftField("description", event.target.value)}
                     rows={3}
                     placeholder="Type description"
                   />
-                </label>
-
-                {typePropertyEditor.mode === "entity" && (
-                  <EditableStringListEditor
-                    title="Metadata (String List)"
-                    values={Array.isArray(typePropertyDraft.examples) ? typePropertyDraft.examples : []}
-                    onChange={(nextValues) => updateTypePropertyDraftField("examples", nextValues)}
-                    placeholder="Add metadata item and press Enter"
-                  />
-                )}
+                </div>
               </div>
 
-              <div className="ontology-property-col">
-                <JsonListEditor
-                  title="Attributes (JSON List)"
-                  values={Array.isArray(typePropertyEditor.jsonTexts?.attributes) ? typePropertyEditor.jsonTexts.attributes : []}
-                  onChange={(nextValues) => updateTypePropertyJsonField("attributes", nextValues)}
-                  invalidIndexes={typePropertyEditor.invalidJsonIndexes?.attributes ?? []}
-                  addLabel="Add attribute JSON"
-                />
+              {typePropertyEditor.mode === "entity" && (
+                <div className="ontology-property-row align-top">
+                  <span className="ontology-property-row-label">Metadata (String List):</span>
+                  <div className="ontology-property-row-editor">
+                    <EditableStringListEditor
+                      values={Array.isArray(typePropertyDraft.examples) ? typePropertyDraft.examples : []}
+                      onChange={(nextValues) => updateTypePropertyDraftField("examples", nextValues)}
+                      placeholder="Add metadata item and press Enter"
+                    />
+                  </div>
+                </div>
+              )}
 
-                {typePropertyEditor.mode === "relationship" && (
+              <div className="ontology-property-row align-top">
+                <span className="ontology-property-row-label">Attributes (JSON List):</span>
+                <div className="ontology-property-row-editor">
                   <JsonListEditor
-                    title="Source Targets (JSON List)"
                     values={
-                      Array.isArray(typePropertyEditor.jsonTexts?.source_targets)
-                        ? typePropertyEditor.jsonTexts.source_targets
+                      Array.isArray(typePropertyEditor.jsonTexts?.attributes)
+                        ? typePropertyEditor.jsonTexts.attributes
                         : []
                     }
-                    onChange={(nextValues) => updateTypePropertyJsonField("source_targets", nextValues)}
-                    invalidIndexes={typePropertyEditor.invalidJsonIndexes?.source_targets ?? []}
-                    addLabel="Add source-target JSON"
+                    onChange={(nextValues) => updateTypePropertyJsonField("attributes", nextValues)}
+                    invalidIndexes={typePropertyEditor.invalidJsonIndexes?.attributes ?? []}
+                    addLabel="Add attribute JSON"
                   />
-                )}
+                </div>
               </div>
+
+              {typePropertyEditor.mode === "relationship" && (
+                <div className="ontology-property-row align-top">
+                  <span className="ontology-property-row-label">Source Targets (JSON List):</span>
+                  <div className="ontology-property-row-editor">
+                    <JsonListEditor
+                      values={
+                        Array.isArray(typePropertyEditor.jsonTexts?.source_targets)
+                          ? typePropertyEditor.jsonTexts.source_targets
+                          : []
+                      }
+                      onChange={(nextValues) => updateTypePropertyJsonField("source_targets", nextValues)}
+                      invalidIndexes={typePropertyEditor.invalidJsonIndexes?.source_targets ?? []}
+                      addLabel="Add source-target JSON"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
             {typePropertyEditor.error && <p className="ontology-editor-error">{typePropertyEditor.error}</p>}
             <div className="ontology-editor-actions">

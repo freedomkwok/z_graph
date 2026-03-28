@@ -36,7 +36,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
   };
 
   const onDeleteLabel = async (name) => {
-    const confirmed = window.confirm(`Delete prompt label '${name}'?`);
+    const confirmed = window.confirm(`Delete category label '${name}'?`);
     if (!confirmed) return;
     setPageError("");
     setPageNotice("");
@@ -73,7 +73,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       <main className="project-management-page">
         <section className="project-management-card">
           <div className="project-management-head">
-            <h1>Prompt Label Management</h1>
+            <h1>Category Label Management</h1>
             <div className="prompt-label-head-actions">
               <button
                 className="icon-btn"
@@ -104,7 +104,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
             </div>
           </div>
           <p className="project-management-note">
-            Manage available prompt labels used by Step A generation. Labels are
+            Manage available category labels used by Step A generation. Labels are
             stored in project storage and reused across projects.
           </p>
           <p className="project-management-note">Total labels: {totalLabels}</p>

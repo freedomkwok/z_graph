@@ -256,16 +256,16 @@ function createProjectActions({
       });
       const payload = await response.json();
       if (!response.ok || !payload?.success) {
-        throw new Error(payload?.error ?? "Failed to update project prompt label");
+        throw new Error(payload?.error ?? "Failed to update project category label");
       }
       dispatch({
         type: "PATCH_CURRENT_PROJECT",
         payload: { prompt_label: normalizedLabel },
       });
       await fetchProjects(projectId, false);
-      addSystemLog(`Project prompt label updated: ${projectId} -> ${normalizedLabel}`);
+      addSystemLog(`Project category label updated: ${projectId} -> ${normalizedLabel}`);
     } catch (error) {
-      addSystemLog(`Failed to save project prompt label: ${String(error)}`);
+      addSystemLog(`Failed to save project category label: ${String(error)}`);
     }
   };
 

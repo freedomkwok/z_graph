@@ -120,7 +120,7 @@ export default function TopBar({ currentPage = "workspace", onNavigate }) {
                     onNavigate?.("/settings/prompt-labels");
                   }}
                 >
-                  Prompt Label
+                  Category Label
                 </button>
               </div>
             )}

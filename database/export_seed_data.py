@@ -71,7 +71,7 @@ def _jsonb_literal(value: object) -> str:
 
 
 def _build_seed_sql(
-    prompt_labels: list[tuple[str, str, str]],
+    prompt_labels: list[tuple[str, str | None, str, str]],
     projects: list[tuple[str, str, str, object, str | None, str | None, str | None, str | None, str | None]],
 ) -> str:
     lines: list[str] = []
@@ -82,16 +82,17 @@ def _build_seed_sql(
     lines.append("")
 
     if prompt_labels:
-        lines.append("INSERT INTO prompt_labels (name, created_at, updated_at)")
+        lines.append("INSERT INTO prompt_labels (name, project_id, created_at, updated_at)")
         lines.append("VALUES")
         label_values: list[str] = []
         for row in prompt_labels:
-            name, created_at, updated_at = row
+            name, project_id, created_at, updated_at = row
             label_values.append(
-                f"  ({_sql_literal(name)}, {_sql_literal(created_at)}, {_sql_literal(updated_at)})"
+                f"  ({_sql_literal(name)}, {_sql_literal(project_id)}, {_sql_literal(created_at)}, {_sql_literal(updated_at)})"
             )
         lines.append(",\n".join(label_values))
         lines.append("ON CONFLICT (name) DO UPDATE SET")
+        lines.append("  project_id = EXCLUDED.project_id,")
         lines.append("  created_at = EXCLUDED.created_at,")
         lines.append("  updated_at = EXCLUDED.updated_at;")
         lines.append("")
@@ -155,7 +156,7 @@ def export_seed_data(output_path: Path) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT name, created_at::text, updated_at::text
+                SELECT name, project_id, created_at::text, updated_at::text
                 FROM prompt_labels
                 ORDER BY name ASC
                 """
