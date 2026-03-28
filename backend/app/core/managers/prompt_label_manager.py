@@ -341,6 +341,32 @@ class PromptLabelManager:
         return "\n".join(f"- {value}" for value in values) + "\n"
 
     @classmethod
+    def _remove_cross_pair_duplicates(
+        cls,
+        values_by_type: dict[str, list[str]],
+    ) -> dict[str, list[str]]:
+        # Keep primary lists intact and filter overlaps from paired exception lists.
+        # This protects UI/default retrieval when synced files are inconsistent.
+        for left_field, right_field in cls._LABEL_TYPE_CONFLICT_PAIRS:
+            left_values = values_by_type.get(left_field, [])
+            right_values = values_by_type.get(right_field, [])
+            if not left_values or not right_values:
+                continue
+
+            left_lookup = {str(value).strip().lower() for value in left_values if str(value).strip()}
+            if not left_lookup:
+                continue
+
+            filtered_right = [
+                value
+                for value in right_values
+                if str(value).strip() and str(value).strip().lower() not in left_lookup
+            ]
+            values_by_type[right_field] = filtered_right
+
+        return values_by_type
+
+    @classmethod
     def _touch_label_updated_at(cls, label_name: str) -> None:
         now_iso = datetime.now().isoformat()
         if cls._use_postgres_storage():
@@ -393,6 +419,8 @@ class PromptLabelManager:
 
             resolved_types[type_name] = cls._parse_string_list_content(content)
             source_paths[type_name] = selected_source
+
+        resolved_types = cls._remove_cross_pair_duplicates(resolved_types)
 
         return {
             "label_name": resolved_label,

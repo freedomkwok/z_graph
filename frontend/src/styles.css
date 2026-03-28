@@ -1413,6 +1413,19 @@ textarea {
   cursor: pointer;
 }
 
+.label-dropdown-trigger-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.label-dropdown-trigger-main > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .label-dropdown-trigger.open {
   border-color: #ff6b35;
   box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.12);
@@ -1516,6 +1529,12 @@ textarea {
   border: 1px solid #c6d0f6;
   background: #eef1ff;
   color: #3c4fb8;
+}
+
+.label-dropdown-trigger-project-indicator {
+  width: 16px;
+  height: 16px;
+  font-size: 10px;
 }
 
 .label-dropdown-item-edit {
@@ -1850,8 +1869,8 @@ textarea {
 }
 
 .ontology-property-row.has-collapse {
-  position: relative;
-  padding-top: 36px;
+  grid-template-columns: 210px minmax(0, 1fr) auto;
+  align-items: flex-start;
 }
 
 .ontology-property-row.align-top {
@@ -1874,13 +1893,21 @@ textarea {
 
 .ontology-property-row-collapse-indicator {
   display: inline-flex;
-  width: 16px;
+  width: 20px;
+  height: 20px;
+  align-items: center;
   justify-content: center;
-  margin-right: 6px;
   border-radius: 999px;
-  font-size: 11px;
+  border: 1px solid transparent;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 1.2;
+  line-height: 1;
+  justify-self: end;
+  align-self: flex-start;
+  margin-top: 2px;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .ontology-property-row-collapse-indicator.collapsed {
@@ -1893,6 +1920,22 @@ textarea {
   background: #ffebee;
 }
 
+.ontology-property-row-collapse-indicator:hover {
+  border-color: #ff6b35;
+}
+
+.ontology-property-row-collapse-indicator:focus-visible {
+  outline: none;
+  border-color: #ff6b35;
+  box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.18);
+}
+
+.ontology-property-row-collapse-indicator.disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .ontology-property-row:focus-within .ontology-property-row-label {
   color: #d45a2f;
 }
@@ -1901,40 +1944,6 @@ textarea {
   min-width: 0;
   display: grid;
   gap: 8px;
-}
-
-.ontology-property-row-collapse-btn {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  border: 1px solid #d8d8d8;
-  background: #fff;
-  color: #444;
-  border-radius: 8px;
-  width: 32px;
-  height: 28px;
-  padding: 0;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.ontology-property-row-collapse-btn:hover {
-  border-color: #ff6b35;
-  color: #ff6b35;
-  background: #fff4ef;
-}
-
-.ontology-property-row-collapse-btn:disabled {
-  opacity: 0.65;
-  cursor: not-allowed;
-}
-
-.ontology-property-row-collapse-icon {
-  line-height: 1;
 }
 
 .ontology-property-collapsed-note {
@@ -1950,6 +1959,66 @@ textarea {
 .ontology-string-list {
   display: grid;
   gap: 8px;
+}
+
+.ontology-string-list-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ontology-string-edit-mode-btn {
+  border: 1px solid #d8d8d8;
+  background: #fff;
+  color: #444;
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ontology-string-edit-mode-btn:hover {
+  border-color: #ff6b35;
+  color: #ff6b35;
+  background: #fff4ef;
+}
+
+.ontology-string-edit-mode-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.ontology-string-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ontology-string-list-item .ontology-string-chip {
+  flex: 1;
+  min-width: 0;
+}
+
+.ontology-string-delete-btn {
+  border: 1px solid #e2b5b5;
+  background: #fff;
+  color: #9f1c1c;
+  border-radius: 7px;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ontology-string-delete-btn:hover {
+  border-color: #ba1a1a;
+}
+
+.ontology-string-delete-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .ontology-string-chip {

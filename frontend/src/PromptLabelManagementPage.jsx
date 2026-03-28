@@ -599,44 +599,51 @@ export default function PromptLabelManagementPage({ onNavigate }) {
                 const disabled =
                   promptLabelEditor.loadingTypes || promptLabelEditor.syncing || promptLabelEditor.savingTypes;
                 const isCollapsed = Boolean(promptLabelEditor?.collapsedTypeSections?.[row.field]);
+                const collapsedCount = Array.isArray(promptLabelEditor.typeLists?.[row.field])
+                  ? promptLabelEditor.typeLists[row.field].length
+                  : 0;
                 return (
                   <div
                     key={row.field}
                     className={`ontology-property-row align-top has-collapse ${isCollapsed ? "collapsed" : ""}`}
                   >
                     <span className="ontology-property-row-label">
-                      <span
-                        className={`ontology-property-row-collapse-indicator ${isCollapsed ? "collapsed" : "expanded"}`}
-                        aria-hidden="true"
-                      >
-                        {isCollapsed ? "+" : "-"}
-                      </span>
                       {row.label}:
                     </span>
                     <div className="ontology-property-row-editor">
                       {isCollapsed ? (
-                        <p className="field-note ontology-property-collapsed-note">Collapsed</p>
+                        <p className="field-note ontology-property-collapsed-note">
+                          Total: {collapsedCount} item{collapsedCount === 1 ? "" : "s"}
+                        </p>
                       ) : (
                         <EditableStringListEditor
                           values={promptLabelEditor.typeLists?.[row.field] ?? []}
                           onChange={(nextValues) => updatePromptLabelTypeListDraft(row.field, nextValues)}
                           placeholder={row.placeholder}
                           disabled={disabled}
+                          showEditTools
                         />
                       )}
                     </div>
-                    <button
-                      className="ontology-property-row-collapse-btn"
-                      type="button"
-                      onClick={() => togglePromptLabelTypeSectionCollapse(row.field)}
-                      disabled={disabled}
+                    <span
+                      className={`ontology-property-row-collapse-indicator ${isCollapsed ? "collapsed" : "expanded"} ${disabled ? "disabled" : ""}`}
+                      role="button"
+                      tabIndex={disabled ? -1 : 0}
+                      onClick={() => {
+                        if (disabled) return;
+                        togglePromptLabelTypeSectionCollapse(row.field);
+                      }}
+                      onKeyDown={(event) => {
+                        if (disabled) return;
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        togglePromptLabelTypeSectionCollapse(row.field);
+                      }}
                       aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${row.label}`}
                       title={isCollapsed ? "Expand section" : "Collapse section"}
                     >
-                      <span aria-hidden="true" className="ontology-property-row-collapse-icon">
-                        {isCollapsed ? "▶️" : "🔽"}
-                      </span>
-                    </button>
+                      {isCollapsed ? "+" : "-"}
+                    </span>
                   </div>
                 );
               })}

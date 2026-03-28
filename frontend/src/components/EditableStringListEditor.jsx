@@ -10,19 +10,28 @@ export default function EditableStringListEditor({
   chipMarkerClassName = "ontology-string-chip-marker",
   inputClassName = "ontology-string-input",
   editInputClassName = "ontology-string-edit-input",
+  showEditTools = false,
 }) {
   const [inputValue, setInputValue] = useState("");
   const [editingIndex, setEditingIndex] = useState(-1);
   const [editingValue, setEditingValue] = useState("");
+  const [showDeleteControls, setShowDeleteControls] = useState(false);
   const addInputRef = useRef(null);
   const editInputRef = useRef(null);
+  const commitLockRef = useRef(false);
   const normalizedValues = Array.isArray(values) ? values : [];
+  const canShowDeleteControls = showDeleteControls && editingIndex < 0;
 
   useEffect(() => {
     if (editingIndex < 0) return;
     editInputRef.current?.focus();
     editInputRef.current?.select();
   }, [editingIndex]);
+
+  useEffect(() => {
+    if (showEditTools || !showDeleteControls) return;
+    setShowDeleteControls(false);
+  }, [showDeleteControls, showEditTools]);
 
   const hasDuplicate = (nextValue, excludedIndex = -1) =>
     normalizedValues.some(
@@ -49,26 +58,66 @@ export default function EditableStringListEditor({
 
   const beginEdit = (targetIndex) => {
     if (disabled) return;
+    commitLockRef.current = false;
     setEditingIndex(targetIndex);
     setEditingValue(normalizedValues[targetIndex] ?? "");
   };
 
   const commitEdit = () => {
-    if (disabled || editingIndex < 0) return;
+    if (disabled || editingIndex < 0 || commitLockRef.current) return;
+    commitLockRef.current = true;
+    const targetIndex = editingIndex;
     const normalized = String(editingValue ?? "").trim();
-    if (!normalized) {
-      removeValueAt(editingIndex);
-    } else if (!hasDuplicate(normalized, editingIndex)) {
-      const nextValues = [...normalizedValues];
-      nextValues[editingIndex] = normalized;
-      onChange(nextValues);
-    }
     setEditingIndex(-1);
     setEditingValue("");
+
+    if (targetIndex >= normalizedValues.length) {
+      setTimeout(() => {
+        commitLockRef.current = false;
+      }, 0);
+      return;
+    }
+
+    if (!normalized) {
+      removeValueAt(targetIndex);
+    } else if (!hasDuplicate(normalized, targetIndex)) {
+      const nextValues = [...normalizedValues];
+      nextValues[targetIndex] = normalized;
+      onChange(nextValues);
+    }
+
+    setTimeout(() => {
+      commitLockRef.current = false;
+    }, 0);
   };
 
   return (
     <div className={listClassName} onClick={() => !disabled && addInputRef.current?.focus()}>
+      {showEditTools && (
+        <div
+          className="ontology-string-list-toolbar"
+          onClick={(event) => {
+            event.stopPropagation();
+          }}
+        >
+          <button
+            className="ontology-string-edit-mode-btn"
+            type="button"
+            onMouseDown={(event) => {
+              event.preventDefault();
+            }}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (disabled) return;
+              setShowDeleteControls((current) => !current);
+            }}
+            disabled={disabled || normalizedValues.length === 0 || editingIndex >= 0}
+            title={showDeleteControls ? "Hide delete actions" : "Show delete actions"}
+          >
+            {showDeleteControls ? "Done" : "Edit"}
+          </button>
+        </div>
+      )}
       {normalizedValues.map((value, index) =>
         editingIndex === index ? (
           <input
@@ -81,29 +130,54 @@ export default function EditableStringListEditor({
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
-                commitEdit();
+                event.currentTarget.blur();
               } else if (event.key === "Escape") {
                 event.preventDefault();
+                commitLockRef.current = true;
                 setEditingIndex(-1);
                 setEditingValue("");
+                setTimeout(() => {
+                  commitLockRef.current = false;
+                }, 0);
               }
             }}
             disabled={disabled}
           />
         ) : (
-          <button
-            key={`${value}-${index}`}
-            className={chipClassName}
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              beginEdit(index);
-            }}
-            disabled={disabled}
-          >
-            <span className={chipMarkerClassName} aria-hidden="true" />
-            <span>{value}</span>
-          </button>
+          <div className="ontology-string-list-item" key={`${value}-${index}`}>
+            <button
+              className={chipClassName}
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                beginEdit(index);
+              }}
+              disabled={disabled}
+            >
+              <span className={chipMarkerClassName} aria-hidden="true" />
+              <span>{value}</span>
+            </button>
+            {canShowDeleteControls && (
+              <button
+                className="ontology-string-delete-btn"
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  removeValueAt(index);
+                }}
+                disabled={disabled}
+                title={`Delete ${value}`}
+              >
+                Delete
+              </button>
+            )}
+          </div>
         ),
       )}
       <input
@@ -112,7 +186,9 @@ export default function EditableStringListEditor({
         value={inputValue}
         onChange={(event) => setInputValue(event.target.value)}
         placeholder={placeholder}
-        onBlur={appendValue}
+        onBlur={() => {
+          setInputValue((current) => String(current ?? "").trim());
+        }}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === ",") {
             event.preventDefault();

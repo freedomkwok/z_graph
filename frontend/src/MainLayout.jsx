@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import GraphEmbedPanel from "./GraphEmbedPanel";
-import TaskPanel from "./TaskPanel";
+import TaskPanel from "./TaskPanel/index";
 import TopBar from "./TopBar";
 import { useTaskStore } from "./TaskStore/index";
 
