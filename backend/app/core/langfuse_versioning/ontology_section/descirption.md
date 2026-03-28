@@ -41,3 +41,20 @@ Local structure is intentionally different from Langfuse naming.
   - `ontology_section/labels/medical/`
 - After sync, Langfuse keeps the same prompt names under `ontology_section/labels/*`,
   and distinguishes variants by labels (`production`, `medical`, etc.).
+
+## 5) Project Override Retrieval
+
+- Project override applies to the 6 label-based prompts only.
+- Base prompts in `ontology_section/prompts/*` remain global/base.
+- Project-scoped Langfuse prompt name format:
+  - `ontology_section/labels/<PROMPT_NAME>/<project_id>`
+- Label remains a Langfuse label (for example `production`, `medical`).
+
+Resolution by project context:
+
+1. If `project_id` is not null, try project-scoped prompt first.
+2. If missing, fallback to global prompt (`ontology_section/labels/<PROMPT_NAME>`).
+3. Then fallback across labels (`requested -> production -> default`).
+4. Finally fallback to local files.
+
+If `project_id` is null, retrieval is global-only.

@@ -34,6 +34,16 @@ export default function TopBar({ currentPage = "workspace", onNavigate }) {
     [projectCatalog.items, form.projectId],
   );
 
+  const goToWorkspaceHome = () => {
+    if (typeof onNavigate === "function") {
+      onNavigate("/");
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.location.assign(`${window.location.origin}/`);
+    }
+  };
+
   const clearCloseTimer = () => {
     if (!closeTimerRef.current) return;
     window.clearTimeout(closeTimerRef.current);
@@ -92,7 +102,9 @@ export default function TopBar({ currentPage = "workspace", onNavigate }) {
 
   return (
     <header className="topbar">
-      <div className="brand">z_graph</div>
+      <button className="brand brand-link-btn" type="button" onClick={goToWorkspaceHome} title="Go to home">
+        z_graph
+      </button>
 
       <div className="topbar-controls">
         <div className="project-picker">

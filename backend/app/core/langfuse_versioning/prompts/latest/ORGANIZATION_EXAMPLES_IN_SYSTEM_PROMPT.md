@@ -4,4 +4,4 @@
 - MediaOutlet: 媒体机构
 - Hospital: 医院
 - School: 中小学
-- 大学
+- NGO: 非政府组织

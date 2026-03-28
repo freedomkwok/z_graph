@@ -19,12 +19,21 @@ class PromptLabelManager:
     _POSTGRES_STORAGE_VALUES = {"postgres", "postgrel", "postgresql"}
     _DEFAULT_LABELS = ("Production", "Medical")
     _PROTECTED_LABELS = {"production"}
+    _INTERNAL_LABELS = {"latest"}
     _LABEL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
     _LABEL_TYPE_FILE_MAP = {
-        "individual": "ENTITY_EXAMPLES_IN_SYSTEM_PROMPT.md",
-        "organization": "ORGANIZATION_EXAMPLES_IN_SYSTEM_PROMPT.md",
-        "relationship": "RELATIONS_IN_SYSTEM_PROMPT.md",
+        "individual": ("ENTITY_EXAMPLES_IN_SYSTEM_PROMPT.md",),
+        "individual_exception": ("ENTITT_EXCEPTIONS_IN_SYSTEM_PROMPT.md",),
+        "organization": ("ORGANIZATION_EXAMPLES_IN_SYSTEM_PROMPT.md",),
+        "organization_exception": ("ORGANIZATION_EXCEPTIONS_IN_SYSTEM_PROMPT.md",),
+        "relationship": ("RELATIONS_IN_SYSTEM_PROMPT copy.md", "RELATIONS_IN_SYSTEM_PROMPT.md"),
+        "relationship_exception": ("RELATIONS_EXPCETIONS_IN_SYSTEM_PROMPT.md",),
     }
+    _LABEL_TYPE_CONFLICT_PAIRS = (
+        ("individual", "individual_exception"),
+        ("organization", "organization_exception"),
+        ("relationship", "relationship_exception"),
+    )
     LABELS_FILE = os.path.join(Config.UPLOAD_FOLDER, "prompt_labels.json")
     PROMPT_VERSIONING_DIR = Path(__file__).resolve().parents[1] / "langfuse_versioning"
 
@@ -52,6 +61,23 @@ class PromptLabelManager:
             if current_name and current_name.lower() == target_lower:
                 return current_name
         return None
+
+    @classmethod
+    def _is_internal_label(cls, name: str | None) -> bool:
+        normalized = str(name or "").strip().lower()
+        return bool(normalized and normalized in cls._INTERNAL_LABELS)
+
+    @classmethod
+    def _filter_user_labels(cls, labels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        filtered: list[dict[str, Any]] = []
+        for item in labels:
+            name = str((item or {}).get("name") or "").strip()
+            if not name:
+                continue
+            if cls._is_internal_label(name):
+                continue
+            filtered.append(item)
+        return filtered
 
     @classmethod
     def normalize_label_name(cls, value: str | None) -> str:
@@ -123,16 +149,26 @@ class PromptLabelManager:
     def list_labels(cls) -> list[dict[str, str]]:
         cls.initialize_labels()
         if cls._use_postgres_storage():
-            return list_prompt_labels_data(cls._get_storage_connection_string())
-        return sorted(cls._load_file_labels(), key=lambda item: item["name"].lower())
+            labels = list_prompt_labels_data(cls._get_storage_connection_string())
+            labels = cls._filter_user_labels(labels)
+            return sorted(labels, key=lambda item: str(item.get("name", "")).lower())
+        labels = cls._filter_user_labels(cls._load_file_labels())
+        return sorted(labels, key=lambda item: item["name"].lower())
 
     @classmethod
     def get_label_stats(cls) -> dict[str, Any]:
         cls.initialize_labels()
         if cls._use_postgres_storage():
-            return get_prompt_label_stats_data(cls._get_storage_connection_string())
+            labels = cls._filter_user_labels(
+                list_prompt_labels_data(cls._get_storage_connection_string())
+            )
+            updated_at = max((str(item.get("updated_at") or "") for item in labels), default="")
+            return {
+                "total_labels": len(labels),
+                "updated_at": updated_at,
+            }
 
-        labels = cls._load_file_labels()
+        labels = cls._filter_user_labels(cls._load_file_labels())
         updated_at = max((str(item.get("updated_at") or "") for item in labels), default="")
         return {
             "total_labels": len(labels),
@@ -243,15 +279,25 @@ class PromptLabelManager:
         cls,
         *,
         label_name: str,
-        file_name: str,
+        file_names: tuple[str, ...],
     ) -> list[Path]:
         normalized_label = cls._normalize_label_folder_name(label_name)
-        prompts_dir = cls.PROMPT_VERSIONING_DIR / "prompts"
-        return [
-            prompts_dir / normalized_label / file_name,
-            prompts_dir / "production" / file_name,
-            prompts_dir / file_name,
-        ]
+        ontology_labels_dir = cls.PROMPT_VERSIONING_DIR / "ontology_section" / "labels"
+        # Keep old folder candidates for backward compatibility.
+        legacy_prompts_dir = cls.PROMPT_VERSIONING_DIR / "prompts"
+        candidates: list[Path] = []
+        for file_name in file_names:
+            next_candidates = [
+                ontology_labels_dir / normalized_label / file_name,
+                ontology_labels_dir / "production" / file_name,
+                legacy_prompts_dir / normalized_label / file_name,
+                legacy_prompts_dir / "production" / file_name,
+                legacy_prompts_dir / file_name,
+            ]
+            for candidate in next_candidates:
+                if candidate not in candidates:
+                    candidates.append(candidate)
+        return candidates
 
     @classmethod
     def _parse_string_list_content(cls, value: str) -> list[str]:
@@ -332,12 +378,12 @@ class PromptLabelManager:
         resolved_types: dict[str, list[str]] = {}
         source_paths: dict[str, str] = {}
 
-        for type_name, file_name in cls._LABEL_TYPE_FILE_MAP.items():
+        for type_name, file_names in cls._LABEL_TYPE_FILE_MAP.items():
             selected_source = ""
             content = ""
             for candidate in cls._build_label_type_file_candidates(
                 label_name=resolved_label,
-                file_name=file_name,
+                file_names=file_names,
             ):
                 if not candidate.exists():
                     continue
@@ -361,7 +407,7 @@ class PromptLabelManager:
 
         resolved_label = cls.ensure_label_exists(label_name)
         normalized_label = cls._normalize_label_folder_name(resolved_label)
-        target_dir = cls.PROMPT_VERSIONING_DIR / "prompts" / normalized_label
+        target_dir = cls.PROMPT_VERSIONING_DIR / "ontology_section" / "labels" / normalized_label
         target_dir.mkdir(parents=True, exist_ok=True)
 
         normalized_types: dict[str, list[str]] = {}
@@ -371,8 +417,20 @@ class PromptLabelManager:
                 field_name=type_name,
             )
 
-        for type_name, file_name in cls._LABEL_TYPE_FILE_MAP.items():
-            target_file = target_dir / file_name
+        for left_field, right_field in cls._LABEL_TYPE_CONFLICT_PAIRS:
+            left_values = normalized_types.get(left_field, [])
+            right_values = normalized_types.get(right_field, [])
+            right_lookup = {value.lower(): value for value in right_values}
+            overlaps = [value for value in left_values if value.lower() in right_lookup]
+            if overlaps:
+                joined = ", ".join(overlaps)
+                raise ValueError(
+                    f"Duplicate values are not allowed between {left_field} and {right_field}: {joined}"
+                )
+
+        for type_name, file_names in cls._LABEL_TYPE_FILE_MAP.items():
+            primary_file_name = file_names[0]
+            target_file = target_dir / primary_file_name
             serialized = cls._serialize_string_list_content(normalized_types[type_name])
             target_file.write_text(serialized, encoding="utf-8")
 
@@ -422,6 +480,8 @@ class PromptLabelManager:
         downloaded_labels: list[str] = []
         for downloaded_label in result.get("downloaded_labels", []):
             if downloaded_label:
+                if cls._is_internal_label(downloaded_label):
+                    continue
                 downloaded_labels.append(cls.ensure_label_exists(downloaded_label))
 
         result["requested_label"] = resolved_label

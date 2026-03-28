@@ -585,6 +585,7 @@ def generate_ontology(
                     context_requirement=requirement,
                     additional_context=additional_context or None,
                     prompt_label=project.prompt_label,
+                    project_id=project.project_id,
                 )
 
                 entity_count = len(ontology.get("entity_types", []))

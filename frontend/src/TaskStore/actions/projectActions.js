@@ -33,7 +33,7 @@ function createProjectActions({
       dispatch({ type: "SET_GRAPH_TASK", payload: initialGraphTask });
       dispatch({ type: "SET_CURRENT_PROJECT", payload: null });
       setFormFields({
-        promptLabel: getPreferredPromptLabel(state.promptLabelCatalog.items, state.form.promptLabel),
+        promptLabel: getPreferredPromptLabel(state.promptLabelCatalog.items, "Production"),
         graphName: "",
         chunkSize: 500,
         chunkOverlap: 50,
@@ -70,7 +70,7 @@ function createProjectActions({
         chunkOverlap: normalizeNonNegativeInteger(hydratedProject.chunk_overlap, 50),
         promptLabel: getPreferredPromptLabel(
           state.promptLabelCatalog.items,
-          hydratedProject.prompt_label ?? state.form.promptLabel,
+          hydratedProject.prompt_label || "Production",
         ),
       });
 
@@ -242,8 +242,12 @@ function createProjectActions({
     return true;
   };
 
-  const setProjectPromptLabel = async (label) => {
-    const normalizedLabel = getPreferredPromptLabel(state.promptLabelCatalog.items, label);
+  const setProjectPromptLabel = async (label, options = {}) => {
+    const forceExact = Boolean(options?.forceExact);
+    const normalizedInput = String(label ?? "").trim() || "Production";
+    const normalizedLabel = forceExact
+      ? normalizedInput
+      : getPreferredPromptLabel(state.promptLabelCatalog.items, normalizedInput);
     setFormField("promptLabel", normalizedLabel);
     const projectId = normalizeProjectId(state.form.projectId);
     if (!projectId) return;

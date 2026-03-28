@@ -96,13 +96,13 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     );
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
-      throw new Error(payload?.error ?? "Failed to sync prompts from Langfuse");
+      throw new Error(payload?.error ?? "Failed to sync category label defaults");
     }
 
     await fetchPromptLabels({ syncFormLabel: false });
     const downloadedFiles = Number(payload?.data?.downloaded_files ?? 0);
     addSystemLog(
-      `Category label synced from Langfuse: ${normalizedName} (${downloadedFiles} file${downloadedFiles === 1 ? "" : "s"})`,
+      `Category label synced from default: ${normalizedName} (${downloadedFiles} file${downloadedFiles === 1 ? "" : "s"})`,
     );
     return payload?.data;
   };
@@ -136,8 +136,17 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           individual: Array.isArray(typeLists?.individual) ? typeLists.individual : [],
+          individual_exception: Array.isArray(typeLists?.individual_exception)
+            ? typeLists.individual_exception
+            : [],
           organization: Array.isArray(typeLists?.organization) ? typeLists.organization : [],
+          organization_exception: Array.isArray(typeLists?.organization_exception)
+            ? typeLists.organization_exception
+            : [],
           relationship: Array.isArray(typeLists?.relationship) ? typeLists.relationship : [],
+          relationship_exception: Array.isArray(typeLists?.relationship_exception)
+            ? typeLists.relationship_exception
+            : [],
         }),
       },
     );

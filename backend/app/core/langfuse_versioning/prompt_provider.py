@@ -42,6 +42,7 @@ class PromptProvider(ABC):
         name: str,
         *,
         label: str | None = None,
+        project_id: str | None = None,
         version: int | None = None,
         **vars: Any,
     ) -> str:
@@ -64,12 +65,13 @@ class FilePromptProvider(PromptProvider):
         name: str,
         *,
         label: str | None = None,
+        project_id: str | None = None,
         version: int | None = None,
         **vars: Any,
     ) -> str:
         del version
         last_exc: FileNotFoundError | None = None
-        for relative_path in build_local_path_candidates(name, label):
+        for relative_path in build_local_path_candidates(name, label, project_id=project_id):
             try:
                 template = self._load_raw_by_path(relative_path)
                 return self._render_template(template, vars)
@@ -123,6 +125,7 @@ class LangfusePromptProvider(PromptProvider):
         name: str,
         *,
         label: str | None = None,
+        project_id: str | None = None,
         version: int | None = None,
         **vars: Any,
     ) -> str:
@@ -134,6 +137,7 @@ class LangfusePromptProvider(PromptProvider):
         return self.retriever.get(
             name=name,
             label=effective_label,
+            project_id=project_id,
             version=version,
             vars=vars,
             cache_ttl_seconds=cache_ttl_seconds,
@@ -150,6 +154,7 @@ class FallbackPromptProvider(PromptProvider):
         name: str,
         *,
         label: str | None = None,
+        project_id: str | None = None,
         version: int | None = None,
         **vars: Any,
     ) -> str:
@@ -163,7 +168,13 @@ class FallbackPromptProvider(PromptProvider):
         last_exc: Exception | None = None
         for candidate in label_candidates:
             try:
-                return self.primary.get(name, label=candidate, version=version, **vars)
+                return self.primary.get(
+                    name,
+                    label=candidate,
+                    project_id=project_id,
+                    version=version,
+                    **vars,
+                )
             except Exception as exc:
                 last_exc = exc
                 continue
@@ -174,7 +185,13 @@ class FallbackPromptProvider(PromptProvider):
             ",".join(str(item) for item in label_candidates),
             str(last_exc),
         )
-        return self.fallback.get(name, label=PRODUCTION_LABEL, version=version, **vars)
+        return self.fallback.get(
+            name,
+            label=PRODUCTION_LABEL,
+            project_id=project_id,
+            version=version,
+            **vars,
+        )
 
 
 def make_prompt_provider(
@@ -182,7 +199,7 @@ def make_prompt_provider(
     client: Any | None = None,
     prompts_dir: Path | str | None = None,
 ) -> PromptProvider:
-    default_prompt_dir = Path(__file__).resolve().parent / "prompts"
+    default_prompt_dir = Path(__file__).resolve().parent
     file_provider = FilePromptProvider(prompts_dir or _setting("prompt_base_dir", default_prompt_dir))
 
     # Always try provider first, then local files.
