@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import EditableStringListEditor from "./components/EditableStringListEditor";
 import TagChip from "./components/TagChip";
+import { BACKEND_DISPLAY_URL } from "./TaskStore/constants";
 import { useTaskStore } from "./TaskStore/index";
 
 const statusClass = (status) => {
@@ -115,6 +116,13 @@ const normalizeDraftTypeNames = (values) => {
     nextNames.push(normalized);
   }
   return nextNames;
+};
+
+const buildAbsoluteApiUrl = (path) => {
+  const normalizedBase = String(BACKEND_DISPLAY_URL ?? "").trim().replace(/\/$/, "");
+  const normalizedPath = `/${String(path ?? "").trim().replace(/^\/+/, "")}`;
+  if (!normalizedBase) return normalizedPath;
+  return `${normalizedBase}${normalizedPath}`;
 };
 
 const PROMPT_LABEL_TYPE_FIELDS = [
@@ -420,6 +428,8 @@ export default function TaskPanel() {
     error: "",
   });
   const [promptLabelDropdownOpen, setPromptLabelDropdownOpen] = useState(false);
+  const [copiedEndpointPath, setCopiedEndpointPath] = useState("");
+  const copyEndpointToastTimerRef = useRef(null);
 
   const stepBUnlocked =
     ontologyTask.status === "success" || graphTask.status === "running" || graphTask.status === "success";
@@ -433,6 +443,42 @@ export default function TaskPanel() {
     promptLabelCatalog.items.length > 0
       ? promptLabelCatalog.items
       : [{ name: form.promptLabel || "Production" }];
+
+  const copyEndpointUrl = async (path) => {
+    const absoluteUrl = buildAbsoluteApiUrl(path);
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(absoluteUrl);
+      } else {
+        const helper = document.createElement("textarea");
+        helper.value = absoluteUrl;
+        document.body.appendChild(helper);
+        helper.select();
+        document.execCommand("copy");
+        document.body.removeChild(helper);
+      }
+      if (copyEndpointToastTimerRef.current) {
+        window.clearTimeout(copyEndpointToastTimerRef.current);
+      }
+      setCopiedEndpointPath(String(path ?? ""));
+      copyEndpointToastTimerRef.current = window.setTimeout(() => {
+        setCopiedEndpointPath("");
+        copyEndpointToastTimerRef.current = null;
+      }, 1200);
+      addSystemLog(`Copied endpoint URL: ${absoluteUrl}`);
+    } catch {
+      addSystemLog(`Failed to copy endpoint URL: ${absoluteUrl}`);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (copyEndpointToastTimerRef.current) {
+        window.clearTimeout(copyEndpointToastTimerRef.current);
+        copyEndpointToastTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleOntologySubmit = async (event) => {
     event.preventDefault();
@@ -1122,16 +1168,33 @@ export default function TaskPanel() {
             {activeStepTab === "A" && (
               <article className="step-card">
                 <div className="card-head">
-                  <div>
-                    <h2 className="step-title">
-                      <span className="step-index-inline">A</span>
-                      Ontology Generate
-                    </h2>
-                    <p className="endpoint">POST /api/ontology/generate</p>
+                  <h2 className="step-title">Ontology Generate</h2>
+                  <div className="card-head-meta">
+                    <button
+                      className="endpoint endpoint-copy-btn"
+                      type="button"
+                      onClick={() => copyEndpointUrl("/api/ontology/generate")}
+                      title={`Click to copy ${buildAbsoluteApiUrl("/api/ontology/generate")}`}
+                    >
+                      POST /api/ontology/generate
+                      {copiedEndpointPath === "/api/ontology/generate" && (
+                        <span className="endpoint-copy-popup" role="status" aria-live="polite">
+                          Copy!
+                        </span>
+                      )}
+                    </button>
+                    <span className={`badge ${statusClass(ontologyTask.status)}`}>{ontologyTask.status}</span>
+                    <span
+                      className="card-info-icon"
+                      role="img"
+                      aria-label="Ontology step information"
+                      data-tooltip="Upload files and generate ontology schema for the project."
+                      title="Upload files and generate ontology schema for the project."
+                    >
+                      ⓘ
+                    </span>
                   </div>
-                  <span className={`badge ${statusClass(ontologyTask.status)}`}>{ontologyTask.status}</span>
                 </div>
-                <p className="card-description">Upload files and generate ontology schema for the project.</p>
 
                 <form className="form-grid" onSubmit={handleOntologySubmit}>
                   <label className="field">
@@ -1145,7 +1208,18 @@ export default function TaskPanel() {
                   </label>
 
                   <label className="field">
-                    <span>Project Name</span>
+                    <div className="field-head">
+                      <span>Project Name</span>
+                      <span
+                        className="card-info-icon field-info-icon"
+                        role="img"
+                        aria-label="Project Name information"
+                        data-tooltip="Project name is locked after project creation."
+                        title="Project name is locked after project creation."
+                      >
+                        ⓘ
+                      </span>
+                    </div>
                     <input
                       value={form.projectName}
                       onChange={(event) => setFormField("projectName", event.target.value)}
@@ -1153,9 +1227,6 @@ export default function TaskPanel() {
                       disabled={isProjectCreated}
                     />
                   </label>
-                  {isProjectCreated && (
-                    <p className="field-note">Project name is locked after project creation.</p>
-                  )}
 
                   <label className="field">
                     <span>Additional Context (optional)</span>
@@ -1167,7 +1238,18 @@ export default function TaskPanel() {
                   </label>
 
                   <label className="field">
-                    <span>Category Label</span>
+                    <div className="field-head">
+                      <span>Category Label</span>
+                      <span
+                        className="card-info-icon field-info-icon"
+                        role="img"
+                        aria-label="Category Label resolution information"
+                        data-tooltip="Prompt resolution tries selected label first, then Production, then local prompt file."
+                        title="Prompt resolution tries selected label first, then Production, then local prompt file."
+                      >
+                        ⓘ
+                      </span>
+                    </div>
                     <div className="label-dropdown" ref={promptLabelDropdownRef}>
                       <button
                         className={`label-dropdown-trigger ${promptLabelDropdownOpen ? "open" : ""}`}
@@ -1187,9 +1269,15 @@ export default function TaskPanel() {
                             .filter((item) => String(item?.name ?? "").trim())
                             .map((item) => {
                               const labelName = String(item?.name ?? "").trim();
+                              const itemProjectId = String(item?.project_id ?? "").trim();
+                              const currentProjectId = String(form.projectId ?? "").trim();
                               const isSelected =
                                 String(form.promptLabel ?? "").trim().toLowerCase() ===
                                 labelName.toLowerCase();
+                              const isProjectScoped =
+                                Boolean(itemProjectId) &&
+                                Boolean(currentProjectId) &&
+                                itemProjectId.toLowerCase() === currentProjectId.toLowerCase();
                               return (
                                 <div
                                   className={`label-dropdown-item ${isSelected ? "selected" : ""}`}
@@ -1207,10 +1295,27 @@ export default function TaskPanel() {
                                     title={labelName}
                                   >
                                     <span className="label-dropdown-item-name">{labelName}</span>
-                                    {isSelected && (
-                                      <span className="label-dropdown-item-selected">Selected</span>
-                                    )}
                                   </button>
+                                  <div className="label-dropdown-item-indicators">
+                                    {isSelected && (
+                                      <span
+                                        className="label-dropdown-item-selected-indicator"
+                                        aria-label="Selected category label"
+                                        title="Selected category label"
+                                      >
+                                        ✓
+                                      </span>
+                                    )}
+                                    {isProjectScoped && (
+                                      <span
+                                        className="label-dropdown-item-project-indicator"
+                                        aria-label="Project label override"
+                                        title="Project label override"
+                                      >
+                                        P
+                                      </span>
+                                    )}
+                                  </div>
                                   <button
                                     className="label-dropdown-item-edit"
                                     type="button"
@@ -1236,9 +1341,6 @@ export default function TaskPanel() {
                         </div>
                       )}
                     </div>
-                    <p className="field-note">
-                      Prompt resolution tries selected label first, then Production, then local prompt file.
-                    </p>
                   </label>
 
                   <label className="field">
@@ -1297,18 +1399,33 @@ export default function TaskPanel() {
             {activeStepTab === "B" && (
               <article className={`step-card ${!stepBUnlocked ? "locked" : ""}`}>
                 <div className="card-head">
-                  <div>
-                    <h2 className="step-title">
-                      <span className="step-index-inline">B</span>
-                      Graph Build
-                    </h2>
-                    <p className="endpoint">POST /api/build</p>
+                  <h2 className="step-title">Graph Build</h2>
+                  <div className="card-head-meta">
+                    <button
+                      className="endpoint endpoint-copy-btn"
+                      type="button"
+                      onClick={() => copyEndpointUrl("/api/build")}
+                      title={`Click to copy ${buildAbsoluteApiUrl("/api/build")}`}
+                    >
+                      POST /api/build
+                      {copiedEndpointPath === "/api/build" && (
+                        <span className="endpoint-copy-popup" role="status" aria-live="polite">
+                          Copy!
+                        </span>
+                      )}
+                    </button>
+                    <span className={`badge ${statusClass(graphTask.status)}`}>{graphTask.status}</span>
+                    <span
+                      className="card-info-icon"
+                      role="img"
+                      aria-label="Graph build step information"
+                      data-tooltip="Build graph from generated ontology and monitor task progress."
+                      title="Build graph from generated ontology and monitor task progress."
+                    >
+                      ⓘ
+                    </span>
                   </div>
-                  <span className={`badge ${statusClass(graphTask.status)}`}>{graphTask.status}</span>
                 </div>
-                <p className="card-description">
-                  Build graph from generated ontology and monitor task progress.
-                </p>
                 {!stepBUnlocked && (
                   <p className="status-line warning">Step B is locked until Step A finishes successfully.</p>
                 )}

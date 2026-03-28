@@ -1175,8 +1175,16 @@ textarea {
 
 .card-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.card-head-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -1188,12 +1196,12 @@ textarea {
 }
 
 .card-head h2 {
-  margin: 0 0 6px;
+  margin: 0;
   font-size: 16px;
 }
 
 .step-title {
-  margin: 0 0 6px;
+  margin: 0;
   font-size: 16px;
   display: inline-flex;
   align-items: center;
@@ -1209,8 +1217,105 @@ textarea {
 
 .endpoint {
   margin: 0;
-  color: #777;
+  color: #676767;
   font-size: 11px;
+  white-space: nowrap;
+  border: 1px solid #dddddd;
+  border-radius: 999px;
+  background: #f3f3f3;
+  padding: 4px 10px;
+  line-height: 1.2;
+  display: inline-flex;
+  align-items: center;
+}
+
+.endpoint-copy-btn {
+  font: inherit;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 3px 8px;
+  line-height: 1.1;
+  position: relative;
+}
+
+.endpoint-copy-btn:hover {
+  border-color: #cfcfcf;
+  background: #ececec;
+  color: #333;
+}
+
+.endpoint-copy-btn:focus-visible {
+  outline: 2px solid rgba(255, 107, 53, 0.45);
+  outline-offset: 1px;
+}
+
+.endpoint-copy-popup {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  z-index: 75;
+  background: #111;
+  color: #fff;
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.22);
+}
+
+.card-info-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid #d8d8d8;
+  background: #fff;
+  color: #666;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  cursor: help;
+  position: relative;
+}
+
+.card-info-icon:hover {
+  border-color: #ff6b35;
+  color: #ff6b35;
+}
+
+.card-info-icon[data-tooltip]:hover::after,
+.card-info-icon[data-tooltip]:focus-visible::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 70;
+  background: #111;
+  color: #fff;
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 11px;
+  line-height: 1.35;
+  width: max-content;
+  max-width: 300px;
+  white-space: normal;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+}
+
+.card-info-icon[data-tooltip]:hover::before,
+.card-info-icon[data-tooltip]:focus-visible::before {
+  content: "";
+  position: absolute;
+  right: 7px;
+  bottom: calc(100% + 3px);
+  z-index: 71;
+  border: 5px solid transparent;
+  border-top-color: #111;
 }
 
 .badge {
@@ -1250,17 +1355,32 @@ textarea {
 
 .form-grid {
   display: grid;
-  gap: 10px;
+  gap: 14px;
+  margin-top: 4px;
 }
 
 .field {
   display: grid;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
+}
+
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .field span {
   color: #666;
+}
+
+.field-info-icon {
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  flex-shrink: 0;
 }
 
 .field input,
@@ -1367,6 +1487,37 @@ textarea {
   text-transform: uppercase;
 }
 
+.label-dropdown-item-indicators {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.label-dropdown-item-selected-indicator,
+.label-dropdown-item-project-indicator {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.label-dropdown-item-selected-indicator {
+  border: 1px solid #bde5cb;
+  background: #e8f8ef;
+  color: #1d7c4c;
+}
+
+.label-dropdown-item-project-indicator {
+  border: 1px solid #c6d0f6;
+  background: #eef1ff;
+  color: #3c4fb8;
+}
+
 .label-dropdown-item-edit {
   border: 1px solid #dddddd;
   background: #fff;
@@ -1388,8 +1539,9 @@ textarea {
 }
 
 .field-note {
-  margin: -2px 0 0;
+  margin: 2px 0 0;
   font-size: 11px;
+  line-height: 1.4;
   color: #8a8a8a;
 }
 
