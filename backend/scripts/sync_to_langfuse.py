@@ -16,12 +16,18 @@ import httpx
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCES = (
-    "app/core/langfuse_versioning/prompts",
+    "app/core/langfuse_versioning/ontology_section",
     "app/core/langfuse_versioning/sub_queries",
     "app/core/langfuse_versioning/fallback_entities",
 )
 LANGFUSE_PROMPT_REF_RE = re.compile(r"@@@langfusePrompt:([^@]+)@@@")
 LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+SYNC_PATH_ALLOWLIST = (
+    re.compile(r"^ontology_section/prompts/[^/]+\.(md|json)$"),
+    re.compile(r"^ontology_section/labels/[^/]+/[^/]+\.(md|json)$"),
+    re.compile(r"^sub_queries/.+\.(md|json)$"),
+    re.compile(r"^fallback_entities/.+\.(md|json)$"),
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,7 +43,7 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help=(
             "Source directory to scan for .md files. "
-            "Can be passed multiple times. Defaults to langfuse_versioning prompts + sub_queries."
+            "Can be passed multiple times. Defaults to ontology_section + sub_queries + fallback_entities."
         ),
     )
     parser.add_argument(
@@ -107,8 +113,19 @@ def _merge_labels(*label_groups: Iterable[str]) -> list[str]:
 
 
 def _infer_labels_from_file_path(relative_file_path: Path, sources: Iterable[str]) -> list[str]:
-    structured_name = _structured_prompt_name(relative_file_path, sources)
-    parts = [part for part in structured_name.split("/") if part]
+    raw_relative = _relative_path_without_source_prefix(relative_file_path, sources)
+    parts = [part for part in raw_relative.split("/") if part]
+
+    # Local structure:
+    #   ontology_section/labels/<label>/<PROMPT_NAME>
+    # Upload structure:
+    #   ontology_section/labels/<PROMPT_NAME> with Langfuse label=<label>.
+    if len(parts) >= 4 and parts[0] == "ontology_section" and parts[1] == "labels":
+        label_candidate = normalize_label(parts[2])
+        if not LABEL_PATTERN.fullmatch(label_candidate):
+            return []
+        return [label_candidate]
+
     if len(parts) < 3:
         return []
 
@@ -130,21 +147,29 @@ def _normalize_source_prefixes(sources: Iterable[str]) -> list[str]:
     return prefixes
 
 
+def _relative_path_without_source_prefix(relative_file_path: Path, sources: Iterable[str]) -> str:
+    raw_path = relative_file_path.as_posix()
+    langfuse_root = "app/core/langfuse_versioning/"
+    if raw_path.startswith(langfuse_root):
+        return raw_path[len(langfuse_root) :]
+
+    source_prefixes = _normalize_source_prefixes(sources)
+    for source_prefix in source_prefixes:
+        if raw_path.startswith(f"{source_prefix}/"):
+            return raw_path[len(source_prefix) + 1 :]
+    return raw_path
+
+
 def _normalize_folder_aliases(name: str) -> str:
+    # Drop local label folder from ontology_section prompt names.
+    parts = [part for part in str(name or "").split("/") if part]
+    if len(parts) >= 4 and parts[0] == "ontology_section" and parts[1] == "labels":
+        return "/".join(["ontology_section", "labels", *parts[3:]])
     return name
 
 
 def _structured_prompt_name(relative_file_path: Path, sources: Iterable[str]) -> str:
-    no_ext = relative_file_path.as_posix()
-    langfuse_root = "app/core/langfuse_versioning/"
-    if no_ext.startswith(langfuse_root):
-        no_ext = no_ext[len(langfuse_root) :]
-    else:
-        source_prefixes = _normalize_source_prefixes(sources)
-        for source_prefix in source_prefixes:
-            if no_ext.startswith(f"{source_prefix}/"):
-                no_ext = no_ext[len(source_prefix) + 1 :]
-                break
+    no_ext = _relative_path_without_source_prefix(relative_file_path, sources)
 
     no_ext = _normalize_folder_aliases(no_ext)
     if no_ext.endswith(".md"):
@@ -168,15 +193,16 @@ def normalize_prompt_name(relative_file_path: Path, prefix: str, sources: Iterab
 
 def _legacy_prompt_name(relative_file_path: Path, sources: Iterable[str]) -> str:
     # Previous behavior: flatten source path and keep only file-level name.
-    no_ext = relative_file_path.as_posix()
-    source_prefixes = _normalize_source_prefixes(sources)
-    for source_prefix in source_prefixes:
-        if no_ext.startswith(f"{source_prefix}/"):
-            no_ext = no_ext[len(source_prefix) + 1 :]
-            break
+    no_ext = _relative_path_without_source_prefix(relative_file_path, sources)
     if no_ext.endswith(".md"):
         no_ext = no_ext[:-3]
     return re.sub(r"/{2,}", "/", no_ext).strip("/")
+
+
+def _is_sync_allowed(relative_file_path: Path, sources: Iterable[str]) -> bool:
+    normalized = _relative_path_without_source_prefix(relative_file_path, sources)
+    normalized = re.sub(r"/{2,}", "/", normalized).strip("/")
+    return any(pattern.fullmatch(normalized) for pattern in SYNC_PATH_ALLOWLIST)
 
 
 def iter_prompt_files(repo_root: Path, sources: Iterable[str]) -> list[Path]:
@@ -185,8 +211,14 @@ def iter_prompt_files(repo_root: Path, sources: Iterable[str]) -> list[Path]:
         source_path = (repo_root / source).resolve()
         if not source_path.exists() or not source_path.is_dir():
             continue
-        files.extend(sorted(source_path.rglob("*.md")))
-        files.extend(sorted(source_path.rglob("*.json")))
+        for file_path in sorted(source_path.rglob("*.md")):
+            rel = file_path.relative_to(repo_root)
+            if _is_sync_allowed(rel, sources):
+                files.append(file_path)
+        for file_path in sorted(source_path.rglob("*.json")):
+            rel = file_path.relative_to(repo_root)
+            if _is_sync_allowed(rel, sources):
+                files.append(file_path)
     return files
 
 

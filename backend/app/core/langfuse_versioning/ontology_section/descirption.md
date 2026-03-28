@@ -1,57 +1,43 @@
-# Prompt Storage and Override Rules
+# Ontology Section Prompt Structure
 
-This document captures the agreed behavior for prompt storage and resolution.
+This document defines the current ontology prompt layout and how it maps to Langfuse.
 
-## 1) Prompt Types
+## 1) Local Folder Structure
 
-- **Base prompts (global only):**
-  - `ONTOLOGY_SYSTEM_PROMPT.md`
-  - `USER_EXTRACTION_PROMPT.md`
-- These 2 are base prompts for ontology flow and should remain base/global prompts.
-- They are **not** treated as project override prompts.
+- Root: `app/core/langfuse_versioning/ontology_section/`
+- Base prompts (2 files):
+  - `ontology_section/prompts/ONTOLOGY_SYSTEM_PROMPT.md`
+  - `ontology_section/prompts/USER_EXTRACTION_PROMPT.md`
+- Label-based prompts (6 files per label):
+  - `ontology_section/labels/<label>/ENTITY_EXAMPLES_IN_SYSTEM_PROMPT.md`
+  - `ontology_section/labels/<label>/ENTITT_EXCEPTIONS_IN_SYSTEM_PROMPT.md`
+  - `ontology_section/labels/<label>/ORGANIZATION_EXAMPLES_IN_SYSTEM_PROMPT.md`
+  - `ontology_section/labels/<label>/ORGANIZATION_EXCEPTIONS_IN_SYSTEM_PROMPT.md`
+  - `ontology_section/labels/<label>/RELATIONS_EXPCETIONS_IN_SYSTEM_PROMPT.md`
+  - `ontology_section/labels/<label>/RELATIONS_IN_SYSTEM_PROMPT copy.md`
 
-## 2) Label-Based Prompt Set (6 prompts)
+## 2) Langfuse Naming Rules
 
-- The remaining 6 prompts are label-scoped prompts:
-  - Entity: `examples` + `exceptions`
-  - Organization: `examples` + `exceptions`
-  - Relations: `examples` + `exceptions`
-- These are stored under label folders (for example `production`, `medical`) in local files and mapped to labeled prompts in Langfuse.
+Local structure is intentionally different from Langfuse naming.
 
-## 3) Global Scope Behavior
+- Base prompt upload name:
+  - `ontology_section/prompts/<PROMPT_NAME>`
+  - No label required.
+- Label-based prompt upload name:
+  - `ontology_section/labels/<PROMPT_NAME>`
+  - Label comes from the local folder name `<label>` (for example `production`, `medical`).
 
-- Globally, the system has 8 logical prompts total:
-  - 2 base prompts
-  - 6 label-based prompts
-- If only `production` exists, that acts as the global default label.
-- To add another global label (for example `medical`) for a label-based prompt, create the same prompt with label `medical`.
+## 3) What You Should See in Langfuse UI
 
-## 4) Project Scope Behavior (Copy-on-Write)
+- `ontology_section/prompts/*` (the 2 base prompts)
+- `ontology_section/labels/*` (the 6 label-based prompts), with label metadata:
+  - `production` for files from `ontology_section/labels/production/`
+  - another label (for example `medical`) when synced from that label folder
 
-- Project override applies to **only the 6 label-based prompts**.
-- If a project has no override for a label-based prompt, backend reads from global.
-- When user opens edit for project scope:
-  - backend loads effective content (usually global if project override does not exist yet).
-- When user saves:
-  - backend writes a project-scoped override (copy-on-write).
+## 4) Global Usage Example
 
-## 5) Project Prompt Naming/Path
-
-- Confirmed project namespace path format:
-  - `prompts/<PROMPT_NAME>/<project_id>`
-- Project save should use the currently selected label as the prompt label.
-
-## 6) Effective Resolution Order (Project Context, Label-Based Prompts)
-
-When resolving one of the 6 label-based prompts for a project:
-
-1. Project-scoped prompt + selected label
-2. Project-scoped prompt + `production` label
-3. Global prompt + selected label
-4. Global prompt + `production` label
-5. Local file fallback
-
-## 7) Important Constraint
-
-- Do not pre-create project prompt copies.
-- Project prompts are created only after user edits and saves.
+- If only `production` exists, system uses global `production`.
+- To add a global medical variant, add the same 6 files under:
+  - `ontology_section/labels/medical/`
+- After sync, Langfuse keeps the same prompt names under `ontology_section/labels/*`,
+  and distinguishes variants by labels (`production`, `medical`, etc.).
