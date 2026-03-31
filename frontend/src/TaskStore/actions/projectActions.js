@@ -34,6 +34,8 @@ function createProjectActions({
       dispatch({ type: "SET_CURRENT_PROJECT", payload: null });
       setFormFields({
         promptLabel: getPreferredPromptLabel(state.promptLabelCatalog.items, "Production"),
+        minimumNodes: 10,
+        minimumEdges: 10,
         graphName: "",
         chunkSize: 500,
         chunkOverlap: 50,
@@ -65,6 +67,8 @@ function createProjectActions({
         projectId: hydratedProject.project_id ?? selectedProjectId,
         projectName: hydratedProject.name ?? "IMP Graph Project",
         simulationRequirement: hydratedProject.context_requirement ?? "",
+        minimumNodes: normalizePositiveInteger(hydratedProject.minimum_nodes, 10),
+        minimumEdges: normalizePositiveInteger(hydratedProject.minimum_edges, 10),
         graphName: "",
         chunkSize: normalizePositiveInteger(hydratedProject.chunk_size, 500),
         chunkOverlap: normalizeNonNegativeInteger(hydratedProject.chunk_overlap, 50),
@@ -262,9 +266,13 @@ function createProjectActions({
       if (!response.ok || !payload?.success) {
         throw new Error(payload?.error ?? "Failed to update project category label");
       }
+      const updatedProject = payload?.data ?? {};
       dispatch({
         type: "PATCH_CURRENT_PROJECT",
-        payload: { prompt_label: normalizedLabel },
+        payload: {
+          prompt_label: normalizedLabel,
+          prompt_label_info: updatedProject?.prompt_label_info ?? null,
+        },
       });
       await fetchProjects(projectId, false);
       addSystemLog(`Project category label updated: ${projectId} -> ${normalizedLabel}`);

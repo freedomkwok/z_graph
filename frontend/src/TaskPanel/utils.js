@@ -249,6 +249,7 @@ export {
   createEmptyPromptLabelTypeLists,
   createPromptLabelTypeCollapseState,
   extractOntologyTypeDrafts,
+  normalizePromptLabelTypeListValues,
   normalizePromptLabelTypeListsPayload,
   normalizeStringList,
   normalizeTypeKey,

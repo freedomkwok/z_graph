@@ -3,6 +3,13 @@ from enum import Enum
 from typing import Any
 
 
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class ProjectStatus(str, Enum):
     CREATED = "created"
     ONTOLOGY_GENERATED = "ontology_generated"
@@ -31,6 +38,8 @@ class Project:
     
     context_requirement: str | None = None
     prompt_label: str = "Production"
+    minimum_nodes: int = 10
+    minimum_edges: int = 10
     chunk_size: int = 500
     chunk_overlap: int = 50
     
@@ -53,6 +62,8 @@ class Project:
             "graph_build_task_id": self.graph_build_task_id,
             "context_requirement": self.context_requirement,
             "prompt_label": self.prompt_label,
+            "minimum_nodes": self.minimum_nodes,
+            "minimum_edges": self.minimum_edges,
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap,
             "error": self.error
@@ -83,7 +94,9 @@ class Project:
             graph_build_task_id=data.get('graph_build_task_id'),
             context_requirement=data.get('context_requirement'),
             prompt_label=data.get("prompt_label", "Production"),
-            chunk_size=data.get('chunk_size', 500),
-            chunk_overlap=data.get('chunk_overlap', 50),
+            minimum_nodes=_as_int(data.get("minimum_nodes", 10), 10),
+            minimum_edges=_as_int(data.get("minimum_edges", 10), 10),
+            chunk_size=_as_int(data.get('chunk_size', 500), 500),
+            chunk_overlap=_as_int(data.get('chunk_overlap', 50), 50),
             error=data.get('error')
         )

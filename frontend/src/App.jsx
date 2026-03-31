@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import AppErrorBoundary from "./components/AppErrorBoundary";
 import MainLayout from "./MainLayout";
 import PromptLabelManagementPage from "./PromptLabelManagementPage";
 import ProjectManagementPage from "./ProjectManagementPage";
@@ -43,13 +44,15 @@ function App() {
 
   return (
     <TaskStoreProvider>
-      {currentPage === "projects" ? (
-        <ProjectManagementPage onNavigate={navigate} />
-      ) : currentPage === "prompt-labels" ? (
-        <PromptLabelManagementPage onNavigate={navigate} />
-      ) : (
-        <MainLayout currentPage={currentPage} onNavigate={navigate} />
-      )}
+      <AppErrorBoundary>
+        {currentPage === "projects" ? (
+          <ProjectManagementPage onNavigate={navigate} />
+        ) : currentPage === "prompt-labels" ? (
+          <PromptLabelManagementPage onNavigate={navigate} />
+        ) : (
+          <MainLayout currentPage={currentPage} onNavigate={navigate} />
+        )}
+      </AppErrorBoundary>
     </TaskStoreProvider>
   );
 }

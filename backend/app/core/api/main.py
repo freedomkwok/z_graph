@@ -28,6 +28,8 @@ logger = get_logger("z_graph.api")
 
 DEFAULT_CHUNK_SIZE = 500
 DEFAULT_CHUNK_OVERLAP = 50
+DEFAULT_MINIMUM_NODES = 10
+DEFAULT_MINIMUM_EDGES = 10
 ProjectPatchBody = Annotated[dict[str, Any], Body(default_factory=dict)]
 DEV_APP_ENVS = {"dev", "development", "local"}
 
@@ -61,6 +63,18 @@ def allowed_file(filename: str) -> bool:
 
 def _normalize_ontology_type_name(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _normalize_minimum_count(value: Any, *, field_name: str, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{field_name} must be greater than 0")
+    return parsed
 
 
 def _sanitize_ontology_payload(payload: Any) -> dict[str, Any]:
@@ -206,6 +220,15 @@ def _timed_task_call(
         )
 
 
+def _build_project_response_data(project: Any) -> dict[str, Any]:
+    project_data = project.to_dict()
+    project_data["prompt_label_info"] = PromptLabelManager.get_project_label_info(
+        label_name=project_data.get("prompt_label"),
+        project_id=project_data.get("project_id"),
+    )
+    return project_data
+
+
 @router.get("/project/list")
 def list_projects(limit: int = Query(default=50, ge=1, le=500)) -> dict[str, Any]:
     projects = ProjectManager.list_projects(limit=limit)
@@ -304,7 +327,7 @@ def get_project(project_id: str) -> Any:
         return _error_response(404, f"Project not found: {project_id}")
     return {
         "success": True,
-        "data": project.to_dict(),
+        "data": _build_project_response_data(project),
     }
 
 
@@ -343,7 +366,7 @@ def update_project(project_id: str, data: ProjectPatchBody) -> Any:
     return {
         "success": True,
         "message": f"Project updated: {project_id}",
-        "data": project.to_dict(),
+        "data": _build_project_response_data(project),
     }
 
 
@@ -375,7 +398,7 @@ def reset_project(project_id: str) -> Any:
     return {
         "success": True,
         "message": f"Project Reset: {project_id}",
-        "data": project.to_dict(),
+        "data": _build_project_response_data(project),
     }
 
 
@@ -385,6 +408,8 @@ def generate_ontology(
     simulation_requirement: str = Form(...),
     project_name: str = Form("Unnamed Project"),
     additional_context: str = Form(""),
+    minimum_nodes: int = Form(DEFAULT_MINIMUM_NODES),
+    minimum_edges: int = Form(DEFAULT_MINIMUM_EDGES),
     prompt_label: str = Form("Production"),
     project_id: str = Form(""),
 ) -> Any:
@@ -401,6 +426,20 @@ def generate_ontology(
 
         normalized_project_id = str(project_id or "").strip()
         normalized_project_name = str(project_name or "").strip() or "Unnamed Project"
+        try:
+            resolved_minimum_nodes = _normalize_minimum_count(
+                minimum_nodes,
+                field_name="minimum_nodes",
+                default=DEFAULT_MINIMUM_NODES,
+            )
+            resolved_minimum_edges = _normalize_minimum_count(
+                minimum_edges,
+                field_name="minimum_edges",
+                default=DEFAULT_MINIMUM_EDGES,
+            )
+        except ValueError as exc:
+            return _error_response(400, str(exc))
+
         if normalized_project_id:
             existing_project = ProjectManager.get_project(normalized_project_id)
             if not existing_project:
@@ -558,6 +597,8 @@ def generate_ontology(
 
                 project.context_requirement = requirement
                 project.prompt_label = resolved_prompt_label
+                project.minimum_nodes = resolved_minimum_nodes
+                project.minimum_edges = resolved_minimum_edges
                 project.error = None
 
                 task_manager.update_task(
@@ -584,6 +625,8 @@ def generate_ontology(
                     document_texts=document_texts,
                     context_requirement=requirement,
                     additional_context=additional_context or None,
+                    minimum_nodes=resolved_minimum_nodes,
+                    minimum_edges=resolved_minimum_edges,
                     prompt_label=project.prompt_label,
                     project_id=project.project_id,
                 )

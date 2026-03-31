@@ -12,6 +12,7 @@ import {
   createEmptyPromptLabelTypeLists,
   createPromptLabelTypeCollapseState,
   extractOntologyTypeDrafts,
+  normalizePromptLabelTypeListValues,
   normalizePromptLabelTypeListsPayload,
   normalizeStringList,
   normalizeTypeKey,
@@ -102,9 +103,7 @@ export default function TaskPanel() {
       ? promptLabelCatalog.items
       : [{ name: form.promptLabel || "Production" }];
   const normalizedCurrentProjectId = String(form.projectId ?? "").trim();
-  const normalizedCurrentPromptLabel = String(form.promptLabel || "Production").trim();
-  const hasCurrentProjectLabelAssociation =
-    Boolean(normalizedCurrentProjectId) && Boolean(normalizedCurrentPromptLabel);
+  const hasCurrentProjectLabelAssociation = Boolean(currentProject?.prompt_label_info?.is_project_scoped);
 
   const copyEndpointUrl = async (path) => {
     const absoluteUrl = buildAbsoluteApiUrl(path);
@@ -899,6 +898,31 @@ export default function TaskPanel() {
                     />
                   </label>
 
+                  <div className="field-row-two">
+                    <label className="field">
+                      <span>Minimum Nodes</span>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={form.minimumNodes}
+                        onChange={(event) => setFormField("minimumNodes", event.target.value)}
+                        placeholder="10"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Minimum Edges</span>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={form.minimumEdges}
+                        onChange={(event) => setFormField("minimumEdges", event.target.value)}
+                        placeholder="10"
+                      />
+                    </label>
+                  </div>
+
                   <label className="field">
                     <div className="field-head">
                       <span>Category Label</span>
@@ -950,8 +974,6 @@ export default function TaskPanel() {
                                 Boolean(itemProjectId) &&
                                 Boolean(normalizedCurrentProjectId) &&
                                 itemProjectId.toLowerCase() === normalizedCurrentProjectId.toLowerCase();
-                              const isProjectAssociated = Boolean(normalizedCurrentProjectId) && isSelected;
-                              const showProjectIndicator = isProjectScoped || isProjectAssociated;
                               return (
                                 <div
                                   className={`label-dropdown-item ${isSelected ? "selected" : ""}`}
@@ -980,19 +1002,11 @@ export default function TaskPanel() {
                                         ✓
                                       </span>
                                     )}
-                                    {showProjectIndicator && (
+                                    {isProjectScoped && (
                                       <span
                                         className="label-dropdown-item-project-indicator"
-                                        aria-label={
-                                          isProjectScoped
-                                            ? "Project label override"
-                                            : "Label selected for this project"
-                                        }
-                                        title={
-                                          isProjectScoped
-                                            ? "Project label override"
-                                            : "Label selected for this project"
-                                        }
+                                        aria-label="Project label override"
+                                        title="Project label override"
                                       >
                                         P
                                       </span>

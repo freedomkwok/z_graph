@@ -50,16 +50,22 @@ class OntologyGenerator:
         document_texts: list[str],
         context_requirement: str = "",
         additional_context: str | None = None,
+        minimum_nodes: int = 10,
+        minimum_edges: int = 10,
         prompt_label: str | None = None,
         project_id: str | None = None,
     ) -> dict[str, Any]:
         effective_prompt_label = self._normalize_prompt_label(prompt_label)
         effective_project_id = str(project_id or "").strip() or None
+        normalized_minimum_nodes = self._normalize_minimum_count(minimum_nodes)
+        normalized_minimum_edges = self._normalize_minimum_count(minimum_edges)
         # Build user message
         user_message = self._build_user_message(
             document_texts,
             context_requirement,
             additional_context,
+            minimum_nodes=normalized_minimum_nodes,
+            minimum_edges=normalized_minimum_edges,
             prompt_label=effective_prompt_label,
             project_id=effective_project_id,
         )
@@ -78,6 +84,8 @@ class OntologyGenerator:
         result = self.llm.chat_json(messages=messages, temperature=0.3, max_tokens=12096)
         result = self._faillback_process(
             result,
+            minimum_nodes=normalized_minimum_nodes,
+            minimum_edges=normalized_minimum_edges,
             prompt_label=effective_prompt_label,
             project_id=effective_project_id,
         )
@@ -92,6 +100,8 @@ class OntologyGenerator:
         document_texts: list[str],
         context_requirement: str,
         additional_context: str | None,
+        minimum_nodes: int,
+        minimum_edges: int,
         prompt_label: str,
         project_id: str | None,
     ) -> str:
@@ -116,6 +126,8 @@ class OntologyGenerator:
             context_requirement=context_requirement or "Not provided",
             combined_text=combined_text,
             additional_context=additional_context or "Not provided",
+            minimum_nodes=str(minimum_nodes),
+            minimum_edges=str(minimum_edges),
         )
 
     def _get_system_prompt(self, prompt_label: str, *, project_id: str | None) -> str:
@@ -203,6 +215,8 @@ class OntologyGenerator:
         self,
         result: dict[str, Any],
         *,
+        minimum_nodes: int,
+        minimum_edges: int,
         prompt_label: str,
         project_id: str | None,
     ) -> dict[str, Any]:
@@ -230,8 +244,10 @@ class OntologyGenerator:
             if len(edge.get("description", "")) > 100:
                 edge["description"] = edge["description"][:97] + "..."
 
-        MAX_ENTITY_TYPES = 10
-        MAX_EDGE_TYPES = 10
+        minimum_entity_types = self._normalize_minimum_count(minimum_nodes)
+        minimum_edge_types = self._normalize_minimum_count(minimum_edges)
+        max_entity_types = max(minimum_entity_types, 10)
+        max_edge_types = max(minimum_edge_types, 10)
 
         person_fallback = self._load_fallback_entity(
             self.PERSON_FALLBACK_NAME,
@@ -260,21 +276,97 @@ class OntologyGenerator:
             needed_slots = len(fallbacks_to_add)
 
             # Drop tail types if we would exceed the cap
-            if current_count + needed_slots > MAX_ENTITY_TYPES:
-                to_remove = current_count + needed_slots - MAX_ENTITY_TYPES
+            if current_count + needed_slots > max_entity_types:
+                to_remove = current_count + needed_slots - max_entity_types
                 # Remove from the end (keep earlier specific types)
                 result["entity_types"] = result["entity_types"][:-to_remove]
 
             result["entity_types"].extend(fallbacks_to_add)
 
         # Hard cap (defensive)
-        if len(result["entity_types"]) > MAX_ENTITY_TYPES:
-            result["entity_types"] = result["entity_types"][:MAX_ENTITY_TYPES]
+        if len(result["entity_types"]) > max_entity_types:
+            result["entity_types"] = result["entity_types"][:max_entity_types]
 
-        if len(result["edge_types"]) > MAX_EDGE_TYPES:
-            result["edge_types"] = result["edge_types"][:MAX_EDGE_TYPES]
+        if len(result["edge_types"]) > max_edge_types:
+            result["edge_types"] = result["edge_types"][:max_edge_types]
+
+        self._ensure_minimum_entity_types(result["entity_types"], minimum_entity_types)
+        self._ensure_minimum_edge_types(
+            result["edge_types"],
+            result["entity_types"],
+            minimum_edge_types,
+        )
 
         return result
+
+    @staticmethod
+    def _normalize_minimum_count(value: Any, default: int = 10) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = default
+        if parsed < 1:
+            return default
+        return min(parsed, 200)
+
+    @staticmethod
+    def _ensure_minimum_entity_types(entity_types: list[dict[str, Any]], minimum_count: int) -> None:
+        existing_names = {
+            str(entity.get("name", "")).strip().lower()
+            for entity in entity_types
+            if isinstance(entity, dict)
+        }
+        cursor = 1
+        while len(entity_types) < minimum_count:
+            candidate_name = f"EntityType{cursor}"
+            candidate_key = candidate_name.lower()
+            cursor += 1
+            if candidate_key in existing_names:
+                continue
+            entity_types.append(
+                {
+                    "name": candidate_name,
+                    "description": "Autogenerated entity type to satisfy minimum node count.",
+                    "attributes": [],
+                    "examples": [],
+                }
+            )
+            existing_names.add(candidate_key)
+
+    @staticmethod
+    def _ensure_minimum_edge_types(
+        edge_types: list[dict[str, Any]],
+        entity_types: list[dict[str, Any]],
+        minimum_count: int,
+    ) -> None:
+        existing_names = {
+            str(edge.get("name", "")).strip().upper()
+            for edge in edge_types
+            if isinstance(edge, dict)
+        }
+        entity_names = [
+            str(entity.get("name", "")).strip()
+            for entity in entity_types
+            if isinstance(entity, dict) and str(entity.get("name", "")).strip()
+        ]
+        default_source = entity_names[0] if entity_names else "Person"
+        default_target = entity_names[1] if len(entity_names) > 1 else default_source
+
+        cursor = 1
+        while len(edge_types) < minimum_count:
+            candidate_name = f"RELATES_TO_{cursor}"
+            cursor += 1
+            if candidate_name in existing_names:
+                continue
+            edge_types.append(
+                {
+                    "name": candidate_name,
+                    "description": "Autogenerated edge type to satisfy minimum edge count.",
+                    "source_targets": [{"source": default_source, "target": default_target}],
+                    "attributes": [],
+                }
+            )
+            existing_names.add(candidate_name)
 
     def _load_fallback_entity(
         self,

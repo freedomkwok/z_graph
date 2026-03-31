@@ -8,10 +8,28 @@ function createOntologyActions({
   seenOntologyLatencyEventIdsRef,
   lastOntologyTaskMessageRef,
 }) {
+  const normalizeMinimumCount = (value, fallback = 10) => {
+    const parsed = Number.parseInt(String(value ?? ""), 10);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      return fallback;
+    }
+    return parsed;
+  };
+
   const runOntologyGenerate = async () => {
-    const { projectId, simulationRequirement, files, projectName, additionalContext, promptLabel } =
-      state.form;
+    const {
+      projectId,
+      simulationRequirement,
+      files,
+      projectName,
+      additionalContext,
+      promptLabel,
+      minimumNodes,
+      minimumEdges,
+    } = state.form;
     const normalizedProjectId = normalizeProjectId(projectId);
+    const normalizedMinimumNodes = normalizeMinimumCount(minimumNodes, 10);
+    const normalizedMinimumEdges = normalizeMinimumCount(minimumEdges, 10);
 
     if (!simulationRequirement.trim()) {
       addSystemLog("Validation failed: simulation requirement is required.");
@@ -64,6 +82,8 @@ function createOntologyActions({
       formData.append("simulation_requirement", simulationRequirement);
       formData.append("project_name", projectName);
       formData.append("additional_context", additionalContext);
+      formData.append("minimum_nodes", String(normalizedMinimumNodes));
+      formData.append("minimum_edges", String(normalizedMinimumEdges));
       formData.append(
         "prompt_label",
         getPreferredPromptLabel(state.promptLabelCatalog.items, promptLabel),

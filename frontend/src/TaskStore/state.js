@@ -36,6 +36,8 @@ const initialState = {
     simulationRequirement: "",
     projectName: "IMP Graph Project",
     additionalContext: "",
+    minimumNodes: 10,
+    minimumEdges: 10,
     promptLabel: "Production",
     graphName: "",
     chunkSize: 500,

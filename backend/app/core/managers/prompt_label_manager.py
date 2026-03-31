@@ -156,6 +156,41 @@ class PromptLabelManager:
         return sorted(labels, key=lambda item: item["name"].lower())
 
     @classmethod
+    def get_project_label_info(
+        cls,
+        *,
+        label_name: str | None,
+        project_id: str | None,
+    ) -> dict[str, Any]:
+        normalized_label_name = cls.normalize_label_name(label_name)
+        normalized_project_id = str(project_id or "").strip()
+
+        matched_label: dict[str, Any] | None = None
+        for item in cls.list_labels():
+            candidate_name = str((item or {}).get("name") or "").strip()
+            if not candidate_name:
+                continue
+            if candidate_name.lower() != normalized_label_name.lower():
+                continue
+            matched_label = item
+            break
+
+        matched_name = str((matched_label or {}).get("name") or normalized_label_name).strip()
+        matched_project_id = str((matched_label or {}).get("project_id") or "").strip()
+        is_project_scoped = bool(
+            matched_project_id
+            and normalized_project_id
+            and matched_project_id.lower() == normalized_project_id.lower()
+        )
+
+        return {
+            "name": matched_name or "Production",
+            "project_id": matched_project_id or None,
+            "is_project_scoped": is_project_scoped,
+            "is_global": not bool(matched_project_id),
+        }
+
+    @classmethod
     def get_label_stats(cls) -> dict[str, Any]:
         cls.initialize_labels()
         if cls._use_postgres_storage():

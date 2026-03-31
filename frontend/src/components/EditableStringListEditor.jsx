@@ -12,6 +12,7 @@ export default function EditableStringListEditor({
   editInputClassName = "ontology-string-edit-input",
   showEditTools = false,
 }) {
+  const toText = (value) => String(value ?? "").trim();
   const [inputValue, setInputValue] = useState("");
   const [editingIndex, setEditingIndex] = useState(-1);
   const [editingValue, setEditingValue] = useState("");
@@ -19,7 +20,9 @@ export default function EditableStringListEditor({
   const addInputRef = useRef(null);
   const editInputRef = useRef(null);
   const commitLockRef = useRef(false);
-  const normalizedValues = Array.isArray(values) ? values : [];
+  const normalizedValues = (Array.isArray(values) ? values : [])
+    .map((value) => toText(value))
+    .filter(Boolean);
   const canShowDeleteControls = showDeleteControls && editingIndex < 0;
 
   useEffect(() => {
@@ -42,12 +45,12 @@ export default function EditableStringListEditor({
 
   const appendValue = () => {
     if (disabled) return;
-    const normalized = String(inputValue ?? "").trim();
+    const normalized = toText(inputValue);
     if (!normalized || hasDuplicate(normalized)) {
       setInputValue("");
       return;
     }
-    onChange([...(Array.isArray(values) ? values : []), normalized]);
+    onChange([...normalizedValues, normalized]);
     setInputValue("");
   };
 
@@ -58,16 +61,17 @@ export default function EditableStringListEditor({
 
   const beginEdit = (targetIndex) => {
     if (disabled) return;
+    if (targetIndex < 0 || targetIndex >= normalizedValues.length) return;
     commitLockRef.current = false;
     setEditingIndex(targetIndex);
-    setEditingValue(normalizedValues[targetIndex] ?? "");
+    setEditingValue(toText(normalizedValues[targetIndex]));
   };
 
   const commitEdit = () => {
     if (disabled || editingIndex < 0 || commitLockRef.current) return;
     commitLockRef.current = true;
     const targetIndex = editingIndex;
-    const normalized = String(editingValue ?? "").trim();
+    const normalized = toText(editingValue);
     setEditingIndex(-1);
     setEditingValue("");
 
@@ -121,10 +125,10 @@ export default function EditableStringListEditor({
       {normalizedValues.map((value, index) =>
         editingIndex === index ? (
           <input
-            key={`${value}-${index}`}
+            key={`edit-${index}-${value}`}
             ref={editInputRef}
             className={editInputClassName}
-            value={editingValue}
+            value={toText(editingValue)}
             onChange={(event) => setEditingValue(event.target.value)}
             onBlur={commitEdit}
             onKeyDown={(event) => {
@@ -144,7 +148,7 @@ export default function EditableStringListEditor({
             disabled={disabled}
           />
         ) : (
-          <div className="ontology-string-list-item" key={`${value}-${index}`}>
+          <div className="ontology-string-list-item" key={`item-${index}-${value}`}>
             <button
               className={chipClassName}
               type="button"
@@ -158,7 +162,7 @@ export default function EditableStringListEditor({
               disabled={disabled}
             >
               <span className={chipMarkerClassName} aria-hidden="true" />
-              <span>{value}</span>
+              <span>{toText(value)}</span>
             </button>
             {canShowDeleteControls && (
               <button
@@ -172,7 +176,7 @@ export default function EditableStringListEditor({
                   removeValueAt(index);
                 }}
                 disabled={disabled}
-                title={`Delete ${value}`}
+                title={`Delete ${toText(value)}`}
               >
                 Delete
               </button>
