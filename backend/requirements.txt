@@ -10,5 +10,7 @@ langfuse
 debugpy
 openai
 tenacity
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
 psycopg[binary]
 pymupdf

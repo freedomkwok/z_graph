@@ -1,3 +1,4 @@
+import base64
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
@@ -40,7 +41,79 @@ def session_context(session_id: str | None):
     return propagate_attributes(session_id=session_id) if session_id is not None else nullcontext()
 
 
+@lru_cache(maxsize=1)
+def _build_graphiti_otel_tracer() -> Any | None:
+    """Build a dedicated OTel tracer for Graphiti -> Langfuse export."""
+    if not Config.APPLY_LANGFUSE_TO_GRAPHITI_TRACE:
+        return None
+
+    endpoint = str(Config.LANGFUSE_OTEL_ENDPOINT or "").strip()
+    if not endpoint:
+        base = str(Config.LANGFUSE_BASE_URL or Config.LANGFUSE_HOST or "").strip().rstrip("/")
+        if not base:
+            logger.warning(
+                "Graphiti OTel tracing enabled, but LANGFUSE_BASE_URL/LANGFUSE_HOST is missing"
+            )
+            return None
+        endpoint = f"{base}/api/public/otel"
+
+    auth_header = str(Config.LANGFUSE_OTEL_AUTH or "").strip()
+    if not auth_header:
+        if not Config.LANGFUSE_PUBLIC_KEY or not Config.LANGFUSE_SECRET_KEY:
+            logger.warning(
+                "Graphiti OTel tracing enabled, but Langfuse public/secret keys are missing"
+            )
+            return None
+        # Fallback auth header format expected by Langfuse OTLP endpoint:
+        # Authorization: Basic base64(public_key:secret_key)
+        langfuse_auth = base64.b64encode(
+            f"{Config.LANGFUSE_PUBLIC_KEY}:{Config.LANGFUSE_SECRET_KEY}".encode()
+        ).decode()
+        auth_header = f"Basic {langfuse_auth}"
+
+    try:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    except ImportError:
+        logger.warning(
+            "Graphiti OTel tracing requires opentelemetry-sdk and "
+            "opentelemetry-exporter-otlp-proto-http"
+        )
+        return None
+
+    try:
+        provider = TracerProvider(resource=Resource.create({"service.name": "graphiti"}))
+        provider.add_span_processor(
+            BatchSpanProcessor(
+                OTLPSpanExporter(
+                    endpoint=endpoint,
+                    headers={"Authorization": auth_header},
+                )
+            )
+        )
+        logger.info("Graphiti OTel tracer initialized for Langfuse endpoint")
+        return provider.get_tracer("graphiti")
+    except Exception:
+        logger.exception("Failed to initialize Graphiti OTel tracer for Langfuse")
+        return None
+
+
 def create_graphiti_langfuse_tracer() -> Any | None:
+    try:
+        from graphiti_core.tracer import create_tracer
+    except ImportError:
+        logger.debug("graphiti_core.tracer is unavailable; Graphiti tracing disabled")
+        return None
+
+    dedicated_otel_tracer = _build_graphiti_otel_tracer()
+    if dedicated_otel_tracer is not None:
+        try:
+            return create_tracer(otel_tracer=dedicated_otel_tracer, span_prefix="graphiti.llm")
+        except Exception:
+            logger.debug("Failed to create Graphiti tracer from dedicated OTel tracer", exc_info=True)
+
     client = get_langfuse_client()
     if client is None:
         return None
@@ -48,12 +121,6 @@ def create_graphiti_langfuse_tracer() -> Any | None:
     otel_tracer = getattr(client, "_otel_tracer", None)
     if otel_tracer is None:
         logger.debug("Langfuse client has no OTel tracer; Graphiti tracing disabled")
-        return None
-
-    try:
-        from graphiti_core.tracer import create_tracer
-    except ImportError:
-        logger.debug("graphiti_core.tracer is unavailable; Graphiti tracing disabled")
         return None
 
     try:

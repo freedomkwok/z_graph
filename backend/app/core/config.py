@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
     langfuse_base_url: str | None = None
+    apply_langfuse_to_graphiti_trace: bool = False
+    langfuse_otel_endpoint: str | None = None
+    langfuse_otel_auth: str | None = None
     zep_api_key: str | None = None
     zep_api_url: str | None = None
     zep_graph_url_template: str | None = None
@@ -113,6 +116,9 @@ class Config:
     LANGFUSE_SECRET_KEY = settings.langfuse_secret_key
     LANGFUSE_HOST = settings.langfuse_host
     LANGFUSE_BASE_URL = settings.langfuse_base_url
+    APPLY_LANGFUSE_TO_GRAPHITI_TRACE = settings.apply_langfuse_to_graphiti_trace
+    LANGFUSE_OTEL_ENDPOINT = settings.langfuse_otel_endpoint
+    LANGFUSE_OTEL_AUTH = settings.langfuse_otel_auth
 
     ZEP_API_KEY = settings.zep_api_key
     ZEP_API_URL = settings.zep_api_url

@@ -151,11 +151,16 @@ class GraphitiClient(ZepClientAdapter):
             if embedder is None:
                 embedder = self._build_default_embedder()
 
+            graphiti_tracer = create_graphiti_langfuse_tracer()
+            trace_span_prefix = "graphiti.oracle" if self.graph_driver is not None else "graphiti"
+
             if self.graph_driver is not None:
                 self._graphiti = Graphiti(
                     llm_client=llm_client,
                     embedder=embedder,
                     graph_driver=self.graph_driver,
+                    tracer=graphiti_tracer,
+                    trace_span_prefix=trace_span_prefix,
                 )
             else:
                 self._graphiti = Graphiti(
@@ -164,6 +169,8 @@ class GraphitiClient(ZepClientAdapter):
                     self.graphdb_password,
                     llm_client=llm_client,
                     embedder=embedder,
+                    tracer=graphiti_tracer,
+                    trace_span_prefix=trace_span_prefix,
                 )
 
             _run_async(self._graphiti.build_indices_and_constraints())
@@ -202,13 +209,6 @@ class GraphitiClient(ZepClientAdapter):
             max_tokens=max_tokens,
         )
         llm_client = GraphitiOpenAIGenericClient(config=config, max_tokens=max_tokens)
-        tracer = create_graphiti_langfuse_tracer()
-        if tracer is not None and hasattr(llm_client, "set_tracer"):
-            try:
-                llm_client.set_tracer(tracer)
-                logger.info("Langfuse tracer has been attached to Graphiti LLM client")
-            except Exception as exc:
-                logger.warning("Failed to attach Langfuse tracer to Graphiti LLM client: %s", exc)
         return llm_client
 
     def _build_default_embedder(self) -> Any:
