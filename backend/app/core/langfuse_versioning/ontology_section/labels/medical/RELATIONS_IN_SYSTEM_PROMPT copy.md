@@ -1,12 +1,12 @@
-- WORKS_FOR: 工作于
-- STUDIES_AT: 就读于
-- AFFILIATED_WITH: 隶属于
-- REPRESENTS: 代表
-- REGULATES: 监管
-- REPORTS_ON: 报道
-- COMMENTS_ON: 评论
-- RESPONDS_TO: 回应
-- SUPPORTS: 支持
-- OPPOSES: 反对
-- COLLABORATES_WITH: 合作
-- COMPETES_WITH: 竞争
+- WORKS_FOR: works for
+- STUDIES_AT: studies at
+- AFFILIATED_WITH: affiliated with
+- REPRESENTS: represents
+- REGULATES: regulates
+- REPORTS_ON: reports on
+- COMMENTS_ON: comments on
+- RESPONDS_TO: responds to
+- SUPPORTS: supports
+- OPPOSES: opposes
+- COLLABORATES_WITH: collaborates with
+- COMPETES_WITH: competes with

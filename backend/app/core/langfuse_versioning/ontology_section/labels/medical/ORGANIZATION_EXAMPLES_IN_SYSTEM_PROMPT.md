@@ -1,7 +1,6 @@
-- University: 高校
-- Company: 公司企业
-- GovernmentAgency: 政府机构
-- MediaOutlet: 媒体机构
-- Hospital: 医院
-- School: 中小学
-- 大学
+- University: higher education institution
+- Company: business organization
+- GovernmentAgency: government agency
+- MediaOutlet: media organization
+- Hospital: hospital
+- School: primary or secondary school
