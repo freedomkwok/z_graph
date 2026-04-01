@@ -48,10 +48,16 @@ class Settings(BaseSettings):
     zep_api_url: str | None = None
     zep_graph_url_template: str | None = None
     zep_backend: str | None = None
+    graphiti_db: str = "neo4j"
     graphdb_uri: str | None = None
     graphdb_user: str | None = None
     graphdb_password: str | None = None
     graphdb_dsn: str | None = None
+    oracle_use_rdf: bool = False
+    oracle_rdf_network_owner: str | None = None
+    oracle_rdf_network_name: str | None = None
+    oracle_rdf_graph_name: str | None = None
+    oracle_rdf_tablespace: str | None = None
     openai_api_key: str | None = None
     openai_base_url: str | None = None
 
@@ -125,11 +131,17 @@ class Config:
     ZEP_GRAPH_URL_TEMPLATE = settings.zep_graph_url_template
     # Prefer ZEP_BACKEND; keep ZEP_CORE for backward compatibility.
     ZEP_BACKEND = settings.zep_backend
+    GRAPHITI_DB = settings.graphiti_db
 
     GRAPHDB_URI = settings.graphdb_uri
     GRAPHDB_USER = settings.graphdb_user
     GRAPHDB_PASSWORD = settings.graphdb_password
     GRAPHDB_DSN = settings.graphdb_dsn
+    ORACLE_USE_RDF = settings.oracle_use_rdf
+    ORACLE_RDF_NETWORK_OWNER = settings.oracle_rdf_network_owner
+    ORACLE_RDF_NETWORK_NAME = settings.oracle_rdf_network_name
+    ORACLE_RDF_GRAPH_NAME = settings.oracle_rdf_graph_name
+    ORACLE_RDF_TABLESPACE = settings.oracle_rdf_tablespace
 
     OPENAI_API_KEY = settings.openai_api_key
     OPENAI_BASE_URL = settings.openai_base_url

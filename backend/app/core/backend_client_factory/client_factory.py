@@ -44,7 +44,8 @@ def _create_graphiti_client(
     dsn: Optional[str] = None,
 ) -> ZepClientAdapter:
     """Graphiti Local Client"""
-    
+
+    graphiti_db = (Config.GRAPHITI_DB or "neo4j").strip().lower()
     uri = graphdb_uri or Config.GRAPHDB_URI
     user = graphdb_user or Config.GRAPHDB_USER
     password = graphdb_password or Config.GRAPHDB_PASSWORD
@@ -52,25 +53,41 @@ def _create_graphiti_client(
 
     has_uri_config = all([uri, user, password])
     has_dsn_config = all([dsn, user, password])
-    if not (has_uri_config or has_dsn_config):
+    if graphiti_db not in {"neo4j", "oracle"}:
         raise ValueError(
-            "GraphDB configuration is incomplete. Using Graphiti requires either "
-            "(GRAPHDB_URI, GRAPHDB_USER, GRAPHDB_PASSWORD) or "
-            "(GRAPHDB_DSN, GRAPHDB_USER, GRAPHDB_PASSWORD)."
+            "GRAPHITI_DB is invalid. Expected one of: neo4j, oracle."
         )
 
-    logger.info(f"Create Graphiti Local Client: {uri}")
-    if dsn:
+    if graphiti_db == "oracle":
+        if not has_dsn_config:
+            raise ValueError(
+                "Oracle Graphiti mode requires GRAPHDB_DSN, GRAPHDB_USER, and GRAPHDB_PASSWORD."
+            )
         from graphiti_core.driver.oracle_driver import OracleDriver
+        logger.info("Create Graphiti Oracle Client: %s", dsn)
         return GraphitiClient(
-            graph_driver=OracleDriver(dsn=dsn, user=user, password=password)
+            graph_driver=OracleDriver(
+                dsn=dsn,
+                user=user,
+                password=password,
+                use_rdf=Config.ORACLE_USE_RDF,
+                rdf_network_owner=Config.ORACLE_RDF_NETWORK_OWNER,
+                rdf_network_name=Config.ORACLE_RDF_NETWORK_NAME,
+                rdf_graph_name=Config.ORACLE_RDF_GRAPH_NAME,
+                rdf_tablespace=Config.ORACLE_RDF_TABLESPACE,
+            )
         )
-    else:
-        return GraphitiClient(
-            graphdb_uri=uri,
-            graphdb_user=user,
-            graphdb_password=password,
+
+    if not has_uri_config:
+        raise ValueError(
+            "Neo4j Graphiti mode requires GRAPHDB_URI, GRAPHDB_USER, and GRAPHDB_PASSWORD."
         )
+    logger.info("Create Graphiti Neo4j Client: %s", uri)
+    return GraphitiClient(
+        graphdb_uri=uri,
+        graphdb_user=user,
+        graphdb_password=password,
+    )
 
 import threading
 
