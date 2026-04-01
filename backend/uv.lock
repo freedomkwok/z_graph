@@ -225,7 +225,7 @@ wheels = [
 [[package]]
 name = "graphiti-core"
 version = "0.28.2"
-source = { editable = "../../../graphiti" }
+source = { editable = "../../graphiti" }
 dependencies = [
     { name = "neo4j" },
     { name = "numpy" },
@@ -376,10 +376,11 @@ source = { editable = "." }
 dependencies = [
     { name = "debugpy" },
     { name = "fastapi" },
-    { name = "graphiti-core" },
     { name = "httpx" },
     { name = "langfuse" },
     { name = "openai" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "pymupdf" },
@@ -411,11 +412,12 @@ dev = [
 requires-dist = [
     { name = "debugpy" },
     { name = "fastapi" },
-    { name = "graphiti-core", editable = "../../../graphiti" },
-    { name = "graphiti-core", marker = "extra == 'graphiti'", editable = "../../../graphiti" },
+    { name = "graphiti-core", marker = "extra == 'graphiti'", editable = "../../graphiti" },
     { name = "httpx" },
     { name = "langfuse" },
     { name = "openai" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.3" },
     { name = "pydantic-settings" },
     { name = "pymupdf", specifier = ">=1.27.2.2" },
