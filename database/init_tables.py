@@ -44,7 +44,7 @@ def _get_connection_string() -> str:
         return project_storage_connection_string
 
     postgres_user = os.getenv("POSTGRES_USER", "z_graph")
-    postgres_password = os.getenv("POSTGRES_PASSWORD", "zep_graph_password")
+    postgres_password = os.getenv("POSTGRES_PASSWORD", "z_graph")
     postgres_host = os.getenv("POSTGRES_HOST", "localhost")
     postgres_port = _default_postgres_port()
     postgres_db = os.getenv("POSTGRES_DB", "z_graph")
@@ -57,7 +57,7 @@ def _get_connection_string() -> str:
 def _get_target_postgres_settings() -> dict[str, str]:
     return {
         "user": os.getenv("POSTGRES_USER", "z_graph"),
-        "password": os.getenv("POSTGRES_PASSWORD", "zep_graph_password"),
+        "password": os.getenv("POSTGRES_PASSWORD", "z_graph"),
         "host": os.getenv("POSTGRES_HOST", "localhost"),
         "port": _default_postgres_port(),
         "database": os.getenv("POSTGRES_DB", "z_graph"),
