@@ -11,6 +11,26 @@ import {
 } from "../utils";
 import { getGraphTaskFromProject, getOntologyTaskFromProject, initialGraphTask, initialOntologyTask } from "../state";
 
+let projectListRequestInFlight = null;
+
+async function fetchProjectListPayload(withApiBase) {
+  if (projectListRequestInFlight) {
+    return projectListRequestInFlight;
+  }
+
+  projectListRequestInFlight = (async () => {
+    const response = await fetch(withApiBase("/api/project/list?limit=200"));
+    const payload = await response.json();
+    return { response, payload };
+  })();
+
+  try {
+    return await projectListRequestInFlight;
+  } finally {
+    projectListRequestInFlight = null;
+  }
+}
+
 function createProjectActions({
   state,
   dispatch,
@@ -135,8 +155,7 @@ function createProjectActions({
       payload: { loading: true, error: "" },
     });
     try {
-      const response = await fetch(withApiBase("/api/project/list?limit=200"));
-      const payload = await response.json();
+      const { response, payload } = await fetchProjectListPayload(withApiBase);
       if (!response.ok || !payload?.success) {
         throw new Error(payload?.error ?? "Failed to list projects");
       }

@@ -19,10 +19,6 @@ export default function ProjectManagementPage({ onNavigate }) {
   const projects = state.projectCatalog.items;
 
   useEffect(() => {
-    fetchProjects(undefined, false);
-  }, []);
-
-  useEffect(() => {
     const nextNames = {};
     for (const project of projects) {
       nextNames[project.project_id] = String(project.name ?? "");

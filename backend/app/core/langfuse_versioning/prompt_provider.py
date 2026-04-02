@@ -23,6 +23,11 @@ logger = logging.getLogger("uvicorn.error")
 
 
 def _setting(name: str, default: Any) -> Any:
+    env_name = str(name or "").strip().upper()
+    if env_name:
+        env_value = os.getenv(env_name)
+        if env_value is not None and str(env_value).strip() != "":
+            return env_value
     return getattr(core_settings, name, default)
 
 
@@ -202,7 +207,11 @@ def make_prompt_provider(
     default_prompt_dir = Path(__file__).resolve().parent
     file_provider = FilePromptProvider(prompts_dir or _setting("prompt_base_dir", default_prompt_dir))
 
-    # Always try provider first, then local files.
+    backend = _normalize_backend(_setting("prompt_backend", "file"))
+    if backend not in {"langfuse", "lanfuse"}:
+        return file_provider
+
+    # Langfuse primary + local file fallback.
     try:
         provider = LangfusePromptProvider(client=client)
     except Exception as exc:
