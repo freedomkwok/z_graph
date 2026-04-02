@@ -20,7 +20,7 @@ import httpx
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = "app/core/langfuse_versioning"
 LANGFUSE_LIST_KEYS = ("data", "prompts", "items", "result")
-SUPPORTED_CATEGORIES = {"prompts", "sub_queries", "fallback_entities"}
+SUPPORTED_CATEGORIES = {"ontology_section", "sub_queries", "fallback_entities"}
 LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
 
@@ -63,8 +63,12 @@ def _extract_prompt_name(item: dict[str, Any]) -> str | None:
     parts = [part for part in normalized.split("/") if part]
     if not parts:
         return None
-    if _normalize_category(parts[0]) not in SUPPORTED_CATEGORIES:
+    category = _normalize_category(parts[0])
+    if category not in SUPPORTED_CATEGORIES:
         return None
+    if category == "ontology_section":
+        if len(parts) < 3 or _normalize_category(parts[1]) not in {"prompts", "labels"}:
+            return None
     if ".." in parts:
         return None
     return normalized
@@ -127,6 +131,25 @@ def _build_target_relative_path(prompt_name: str, label: str | None) -> Path:
         file_name = f"{file_name}{_resolve_file_extension(normalized_name)}"
 
     normalized_label = normalize_label(label)
+
+    if category == "ontology_section":
+        section = _normalize_category(parts[1])
+        if section == "prompts":
+            return Path("ontology_section", "prompts", file_name)
+
+        if section == "labels":
+            relative_parts = ["ontology_section", "labels"]
+            trailing_parts = parts[2:-1]
+            if normalized_label:
+                relative_parts.append(normalized_label)
+                if trailing_parts and _looks_like_label_segment(trailing_parts[0]):
+                    trailing_parts = trailing_parts[1:]
+            relative_parts.extend(trailing_parts)
+            relative_parts.append(file_name)
+            return Path(*relative_parts)
+
+        raise ValueError(f"Unsupported ontology_section prompt name: {prompt_name}")
+
     relative_parts = [_normalize_category(category)]
     trailing_parts = parts[1:-1]
 

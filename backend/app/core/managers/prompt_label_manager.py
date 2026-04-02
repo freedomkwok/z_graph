@@ -318,16 +318,11 @@ class PromptLabelManager:
     ) -> list[Path]:
         normalized_label = cls._normalize_label_folder_name(label_name)
         ontology_labels_dir = cls.PROMPT_VERSIONING_DIR / "ontology_section" / "labels"
-        # Keep old folder candidates for backward compatibility.
-        legacy_prompts_dir = cls.PROMPT_VERSIONING_DIR / "prompts"
         candidates: list[Path] = []
         for file_name in file_names:
             next_candidates = [
                 ontology_labels_dir / normalized_label / file_name,
                 ontology_labels_dir / "production" / file_name,
-                legacy_prompts_dir / normalized_label / file_name,
-                legacy_prompts_dir / "production" / file_name,
-                legacy_prompts_dir / file_name,
             ]
             for candidate in next_candidates:
                 if candidate not in candidates:

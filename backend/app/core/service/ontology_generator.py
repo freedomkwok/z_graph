@@ -38,7 +38,7 @@ class OntologyGenerator:
             base_url=Config.LLM_BASE_URL,
         )
         base_dir = Path(__file__).resolve().parent.parent / "langfuse_versioning"
-        # Unified root so keys like prompts/* and fallback_entities/* resolve identically
+        # Unified root so ontology_section/* and fallback_entities/* resolve identically
         # for both Langfuse and local file fallback.
         self.prompt_provider = prompt_provider or make_prompt_provider(prompts_dir=base_dir)
         self.fallback_entity_provider = fallback_entity_provider or make_prompt_provider(

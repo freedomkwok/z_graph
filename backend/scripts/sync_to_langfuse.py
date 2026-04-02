@@ -131,7 +131,7 @@ def _infer_labels_from_file_path(relative_file_path: Path, sources: Iterable[str
 
     root_category = parts[0]
     label_candidate = normalize_label(parts[1])
-    if root_category not in {"prompts", "sub_queries", "fallback_entities"}:
+    if root_category not in {"sub_queries", "fallback_entities"}:
         return []
     if not LABEL_PATTERN.fullmatch(label_candidate):
         return []
@@ -191,6 +191,13 @@ def normalize_prompt_name(relative_file_path: Path, prefix: str, sources: Iterab
     return name
 
 
+def _build_prompt_variant_key(relative_file_path: Path, prefix: str, sources: Iterable[str]) -> str:
+    canonical_name = normalize_prompt_name(relative_file_path, prefix, sources)
+    inferred_labels = _infer_labels_from_file_path(relative_file_path, sources)
+    labels_key = ",".join(inferred_labels) if inferred_labels else "-"
+    return f"{canonical_name}@@labels={labels_key}"
+
+
 def _legacy_prompt_name(relative_file_path: Path, sources: Iterable[str]) -> str:
     # Previous behavior: flatten source path and keep only file-level name.
     no_ext = _relative_path_without_source_prefix(relative_file_path, sources)
@@ -242,43 +249,47 @@ def order_prompt_files_by_dependency(
     name_prefix: str,
 ) -> tuple[list[Path], list[str]]:
     rel_map: dict[str, Path] = {}
+    variant_to_canonical: dict[str, str] = {}
     alias_map: dict[str, str] = {}
     deps_map: dict[str, set[str]] = {}
 
-    # Build maps for canonical prompt name -> file path.
+    # Build maps for prompt variant -> file path. Label variants may intentionally
+    # share the same canonical prompt name (for example, ontology_section/labels/*).
     for file_path in prompt_files:
         rel = file_path.relative_to(repo_root)
         canonical = normalize_prompt_name(rel, name_prefix, sources)
+        variant_key = _build_prompt_variant_key(rel, name_prefix, sources)
         structured = _structured_prompt_name(rel, sources)
         flat_alias = _flat_prompt_alias(rel)
         legacy_alias = _legacy_prompt_name(rel, sources)
-        existing = rel_map.get(canonical)
+        existing = rel_map.get(variant_key)
         if existing is not None and existing != file_path:
             raise ValueError(
-                f"Duplicate prompt name '{canonical}' for "
+                f"Duplicate prompt variant '{variant_key}' for "
                 f"{existing.relative_to(repo_root)} and {rel}"
             )
 
-        rel_map[canonical] = file_path
-        alias_map[canonical] = canonical
-        alias_map[structured] = canonical
-        alias_map[flat_alias] = canonical
-        alias_map[legacy_alias] = canonical
+        rel_map[variant_key] = file_path
+        variant_to_canonical[variant_key] = canonical
+        alias_map.setdefault(canonical, variant_key)
+        alias_map.setdefault(structured, variant_key)
+        alias_map.setdefault(flat_alias, variant_key)
+        alias_map.setdefault(legacy_alias, variant_key)
 
     missing_refs: set[str] = set()
     # Read dependencies and resolve aliases.
-    for canonical, file_path in rel_map.items():
+    for variant_key, file_path in rel_map.items():
         content = file_path.read_text(encoding="utf-8")
         raw_deps = extract_prompt_dependencies(content)
         resolved: set[str] = set()
         for dep in raw_deps:
-            dep_canonical = alias_map.get(dep)
-            if dep_canonical is None:
+            dep_variant = alias_map.get(dep)
+            if dep_variant is None:
                 missing_refs.add(dep)
                 continue
-            if dep_canonical != canonical:
-                resolved.add(dep_canonical)
-        deps_map[canonical] = resolved
+            if dep_variant != variant_key:
+                resolved.add(dep_variant)
+        deps_map[variant_key] = resolved
 
     # Kahn topological sort (dependencies first).
     reverse_edges: dict[str, set[str]] = {name: set() for name in rel_map}

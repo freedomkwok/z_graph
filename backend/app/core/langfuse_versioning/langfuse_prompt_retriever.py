@@ -74,7 +74,7 @@ def _build_labeled_prompt_name(prompt_name: str, label: str | None) -> str | Non
         return f"{normalized_label}/{parts[0]}"
 
     category = parts[0]
-    if category not in {"prompts", "sub_queries", "fallback_entities"}:
+    if category not in {"sub_queries", "fallback_entities"}:
         return None
 
     file_name = parts[-1]
@@ -278,7 +278,6 @@ class LangfusePromptRetriever:
         # Support folder-structured names synced from langfuse_versioning.
         if "/" not in normalized_prompt_name:
             root_candidates = (
-                "prompts",
                 "sub_queries",
                 "fallback_entities",
                 "ontology_section/prompts",
