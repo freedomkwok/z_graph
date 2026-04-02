@@ -1,1 +1,1 @@
-- Person: any natural person
+- Person

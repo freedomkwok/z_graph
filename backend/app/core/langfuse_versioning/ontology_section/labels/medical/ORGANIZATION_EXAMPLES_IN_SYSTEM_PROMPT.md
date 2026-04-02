@@ -1,6 +1,6 @@
-- University: higher education institution
-- Company: business organization
-- GovernmentAgency: government agency
-- MediaOutlet: media organization
-- Hospital: hospital
-- School: primary or secondary school
+- University
+- Company
+- GovernmentAgency
+- MediaOutlet
+- Hospital
+- School

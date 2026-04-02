@@ -1,12 +1,12 @@
-- WORKS_FOR: works for
-- STUDIES_AT: studies at
-- AFFILIATED_WITH: affiliated with
-- REPRESENTS: represents
-- REGULATES: regulates
-- REPORTS_ON: reports on
-- COMMENTS_ON: comments on
-- RESPONDS_TO: responds to
-- SUPPORTS: supports
-- OPPOSES: opposes
-- COLLABORATES_WITH: collaborates with
-- COMPETES_WITH: competes with
+- WORKS_FOR
+- STUDIES_AT
+- AFFILIATED_WITH
+- REPRESENTS
+- REGULATES
+- REPORTS_ON
+- COMMENTS_ON
+- RESPONDS_TO
+- SUPPORTS
+- OPPOSES
+- COLLABORATES_WITH
+- COMPETES_WITH
