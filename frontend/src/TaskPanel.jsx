@@ -80,6 +80,7 @@ export default function TaskPanel() {
     isNewLabel: false,
     loadingTypes: false,
     savingTypes: false,
+    typesDraftTouched: false,
     typeLists: createEmptyPromptLabelTypeLists(),
     collapsedTypeSections: createPromptLabelTypeCollapseState(),
     syncing: false,
@@ -156,6 +157,7 @@ export default function TaskPanel() {
       isNewLabel: false,
       loadingTypes: true,
       savingTypes: false,
+      typesDraftTouched: false,
       typeLists: createEmptyPromptLabelTypeLists(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
       syncing: false,
@@ -172,6 +174,7 @@ export default function TaskPanel() {
       isNewLabel: true,
       loadingTypes: false,
       savingTypes: false,
+      typesDraftTouched: false,
       typeLists: createEmptyPromptLabelTypeLists(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
       syncing: false,
@@ -188,6 +191,7 @@ export default function TaskPanel() {
       isNewLabel: false,
       loadingTypes: false,
       savingTypes: false,
+      typesDraftTouched: false,
       typeLists: createEmptyPromptLabelTypeLists(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
       syncing: false,
@@ -209,6 +213,7 @@ export default function TaskPanel() {
         .replace(/\b\w/g, (char) => char.toUpperCase());
       return {
         ...current,
+        typesDraftTouched: true,
         typeLists: {
           ...current.typeLists,
           [typeName]: filtered.values,
@@ -269,6 +274,7 @@ export default function TaskPanel() {
         ...current,
         syncing: false,
         loadingTypes: false,
+        typesDraftTouched: false,
         typeLists: normalizePromptLabelTypeListsPayload(typeResult?.types),
         error: "",
         notice: `Synced '${labelName}' from default (${downloadedFiles} file${downloadedFiles === 1 ? "" : "s"}).`,
@@ -348,6 +354,7 @@ export default function TaskPanel() {
         isNewLabel: false,
         loadingTypes: false,
         savingTypes: false,
+        typesDraftTouched: false,
         typeLists: createEmptyPromptLabelTypeLists(),
         collapsedTypeSections: createPromptLabelTypeCollapseState(),
         syncing: false,
@@ -378,6 +385,7 @@ export default function TaskPanel() {
       setPromptLabelEditor((current) => ({
         ...current,
         loadingTypes: false,
+        typesDraftTouched: false,
         typeLists: normalizePromptLabelTypeListsPayload(defaultTypeLists?.types),
         error: "",
         notice: "Reverted to Production defaults. Save to apply changes.",
@@ -696,7 +704,9 @@ export default function TaskPanel() {
           return {
             ...current,
             loadingTypes: false,
-            typeLists: normalizePromptLabelTypeListsPayload(result?.types),
+            typeLists: current.typesDraftTouched
+              ? current.typeLists
+              : normalizePromptLabelTypeListsPayload(result?.types),
           };
         });
       })
@@ -1317,9 +1327,7 @@ export default function TaskPanel() {
                 },
               ].map((row) => {
                 const disabled =
-                  promptLabelEditor.loadingTypes ||
-                  promptLabelEditor.syncing ||
-                  promptLabelEditor.savingTypes;
+                  promptLabelEditor.syncing || promptLabelEditor.savingTypes;
                 const isCollapsed = Boolean(promptLabelEditor?.collapsedTypeSections?.[row.field]);
                 const collapsedCount = Array.isArray(promptLabelEditor.typeLists?.[row.field])
                   ? promptLabelEditor.typeLists[row.field].length
@@ -1408,7 +1416,6 @@ export default function TaskPanel() {
                 type="button"
                 onClick={savePromptLabelTypeLists}
                 disabled={
-                  promptLabelEditor.loadingTypes ||
                   promptLabelEditor.syncing ||
                   promptLabelEditor.savingTypes ||
                   !String(promptLabelEditor.labelName ?? "").trim()

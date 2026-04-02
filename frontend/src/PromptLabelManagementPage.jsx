@@ -104,6 +104,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
     loadingTypes: false,
     syncing: false,
     savingTypes: false,
+    typesDraftTouched: false,
     typeLists: createEmptyPromptLabelTypeLists(),
     collapsedTypeSections: createPromptLabelTypeCollapseState(),
     notice: "",
@@ -146,6 +147,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       loadingTypes: true,
       syncing: false,
       savingTypes: false,
+      typesDraftTouched: false,
       typeLists: createEmptyPromptLabelTypeLists(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
       notice: "",
@@ -162,6 +164,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       loadingTypes: false,
       syncing: false,
       savingTypes: false,
+      typesDraftTouched: false,
       typeLists: createEmptyPromptLabelTypeLists(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
       notice: "",
@@ -180,6 +183,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       loadingTypes: true,
       syncing: false,
       savingTypes: false,
+      typesDraftTouched: false,
       typeLists: createEmptyPromptLabelTypeLists(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
       notice: "",
@@ -190,6 +194,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       setPromptLabelEditor((current) => ({
         ...current,
         loadingTypes: false,
+        typesDraftTouched: false,
         typeLists: normalizePromptLabelTypeListsPayload(sourceTypes?.types),
         notice: `Cloned defaults from '${sourceLabel}'. Enter a new label name and save.`,
       }));
@@ -212,6 +217,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       loadingTypes: false,
       syncing: false,
       savingTypes: false,
+      typesDraftTouched: false,
       typeLists: createEmptyPromptLabelTypeLists(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
       notice: "",
@@ -230,6 +236,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
         .replace(/\b\w/g, (char) => char.toUpperCase());
       return {
         ...current,
+        typesDraftTouched: true,
         typeLists: {
           ...current.typeLists,
           [typeName]: filtered.values,
@@ -295,6 +302,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
         loadingTypes: false,
         syncing: false,
         savingTypes: false,
+        typesDraftTouched: false,
         typeLists: createEmptyPromptLabelTypeLists(),
         collapsedTypeSections: createPromptLabelTypeCollapseState(),
         notice: "",
@@ -328,6 +336,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       setPromptLabelEditor((current) => ({
         ...current,
         loadingTypes: false,
+        typesDraftTouched: false,
         typeLists: normalizePromptLabelTypeListsPayload(result?.types),
         notice: "Reverted to Production defaults. Save to apply changes.",
         error: "",
@@ -357,6 +366,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       setPromptLabelEditor((current) => ({
         ...current,
         syncing: false,
+        typesDraftTouched: false,
         typeLists: normalizePromptLabelTypeListsPayload(result?.types),
         notice: "Synced from Production defaults.",
         error: "",
@@ -385,7 +395,9 @@ export default function PromptLabelManagementPage({ onNavigate }) {
           return {
             ...current,
             loadingTypes: false,
-            typeLists: normalizePromptLabelTypeListsPayload(result?.types),
+            typeLists: current.typesDraftTouched
+              ? current.typeLists
+              : normalizePromptLabelTypeListsPayload(result?.types),
             error: "",
           };
         });
@@ -596,8 +608,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
                   placeholder: "Add fallback relationship type and press Enter",
                 },
               ].map((row) => {
-                const disabled =
-                  promptLabelEditor.loadingTypes || promptLabelEditor.syncing || promptLabelEditor.savingTypes;
+                const disabled = promptLabelEditor.syncing || promptLabelEditor.savingTypes;
                 const isCollapsed = Boolean(promptLabelEditor?.collapsedTypeSections?.[row.field]);
                 const collapsedCount = Array.isArray(promptLabelEditor.typeLists?.[row.field])
                   ? promptLabelEditor.typeLists[row.field].length
@@ -684,7 +695,6 @@ export default function PromptLabelManagementPage({ onNavigate }) {
                 type="button"
                 onClick={savePromptLabelTypeLists}
                 disabled={
-                  promptLabelEditor.loadingTypes ||
                   promptLabelEditor.syncing ||
                   promptLabelEditor.savingTypes ||
                   !String(promptLabelEditor.labelName ?? "").trim()
