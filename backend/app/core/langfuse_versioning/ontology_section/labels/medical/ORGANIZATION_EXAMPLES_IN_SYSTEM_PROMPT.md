@@ -1,0 +1,6 @@
+- University
+- Company
+- GovernmentAgency
+- MediaOutlet
+- Hospital
+- School

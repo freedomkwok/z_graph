@@ -1,0 +1,6 @@
+apiVersion: v2
+name: neo4j-community
+description: Helm chart for Neo4j Community deployment used by zep_graph
+type: application
+version: 0.1.0
+appVersion: "5.26-community"

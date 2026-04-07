@@ -1,0 +1,61 @@
+namespace:
+  create: true
+  name: z-graph
+
+nameOverride: ""
+fullnameOverride: ""
+
+auth:
+  secretName: neo4j-auth
+  value: neo4j/password
+
+persistence:
+  existingClaim: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+
+service:
+  name: neo4j
+  type: ClusterIP
+  httpPort: 7474
+  boltPort: 7687
+
+image:
+  repository: neo4j
+  tag: 5.26-community
+  pullPolicy: IfNotPresent
+
+deployment:
+  name: neo4j-community
+  replicas: 1
+  strategy:
+    type: Recreate
+
+env:
+  plugins: '["apoc"]'
+  apocExportFileEnabled: "true"
+  apocImportFileEnabled: "true"
+  apocImportUseNeo4jConfig: "true"
+  boltListenAddress: ":7687"
+  httpListenAddress: ":7474"
+
+probes:
+  readiness:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 12
+  liveness:
+    initialDelaySeconds: 40
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 6
+
+resources:
+  requests:
+    cpu: "250m"
+    memory: "1Gi"
+  limits:
+    cpu: "1"
+    memory: "2Gi"

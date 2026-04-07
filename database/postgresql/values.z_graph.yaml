@@ -1,0 +1,28 @@
+fullnameOverride: z-graph-postgresql
+
+auth:
+  username: z_graph
+  password: z_graph
+  database: z_graph
+
+primary:
+  persistence:
+    size: 20Gi
+  resourcesPreset: "none"
+  resources:
+    requests:
+      cpu: "4"
+      memory: 4Gi
+    limits:
+      cpu: "8"
+      memory: 8Gi
+
+readReplicas:
+  resourcesPreset: "none"
+  resources:
+    requests:
+      cpu: "4"
+      memory: 4Gi
+    limits:
+      cpu: "8"
+      memory: 8Gi

@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+pydantic-settings
+httpx
+zep-cloud
+graphiti-core>=0.28.2
+langfuse
+debugpy
+openai
+tenacity
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+psycopg[binary]
+pymupdf

@@ -1,0 +1,50 @@
+[project]
+name = "imp-graph-backend"
+version = "0.1.0"
+description = "z_graph backend service"
+requires-python = ">=3.11"
+authors = [{ name = "z_graph Team" }]
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+    "python-dotenv",
+    "pydantic-settings",
+    "httpx",
+    "zep-cloud",
+    "langfuse",
+    "debugpy",
+    "openai",
+    "tenacity",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "psycopg[binary]>=3.3.3",
+    "pymupdf>=1.27.2.2",
+    "zep-cloud>=0.28.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.11.0"]
+graphiti = [
+   "graphiti-core",  # resolved from [tool.uv.sources] for local editable dev
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.11.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.uv.sources]
+graphiti-core = { path = "../../graphiti", editable = true }
