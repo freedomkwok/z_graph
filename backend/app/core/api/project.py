@@ -664,6 +664,35 @@ def get_project(project_id: str) -> Any:
     project = ProjectManager.get_project(project_id)
     if not project:
         return _error_response(404, f"Project not found: {project_id}")
+    if project.status == ProjectStatus.GRAPH_BUILDING:
+        task_manager = TaskManager()
+        build_tid = str(getattr(project, "graph_build_task_id", "") or "").strip()
+        if not task_manager.graph_build_task_is_active(build_tid):
+            logger.info(
+                "Clearing stale graph_building for project=%s during /project load (task_id=%s inactive)",
+                project_id,
+                build_tid or "-",
+            )
+            project.status = ProjectStatus.ONTOLOGY_GENERATED
+            project.graph_build_task_id = None
+            project.error = None
+            ProjectManager.save_project(project)
+            if ProjectManager._use_postgres_storage():
+                try:
+                    merge_project_data_json_fields(
+                        ProjectManager._get_storage_connection_string(),
+                        project_id=project_id,
+                        fields={
+                            "status": ProjectStatus.ONTOLOGY_GENERATED.value,
+                            "graph_build_task_id": None,
+                            "error": None,
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "merge_project_data_json_fields after stale graph_building recovery on /project failed project_id=%s",
+                        project_id,
+                    )
     return {
         "success": True,
         "data": _build_project_response_data(project),
@@ -1715,11 +1744,12 @@ def get_graph_data(
     try:
         normalized_workspace_id = str(project_workspace_id or "").strip() or None
         normalized_project_id = str(project_id or "").strip()
+        resolved_project = None
         project_graph_backend = ""
         if normalized_project_id:
-            project = ProjectManager.get_project(normalized_project_id)
-            if project is not None:
-                project_graph_backend = str(getattr(project, "graph_backend", "") or "")
+            resolved_project = ProjectManager.get_project(normalized_project_id)
+            if resolved_project is not None:
+                project_graph_backend = str(getattr(resolved_project, "graph_backend", "") or "")
 
         requested_graph_backend = _normalize_graph_backend(graph_backend)
         resolved_graph_backend = _resolve_graph_backend(
@@ -1748,11 +1778,24 @@ def get_graph_data(
             return oracle_project_error
 
         def _load_graph_data(selected_backend: str, selected_graph_backend: str) -> dict[str, Any]:
+            oracle_runtime = (
+                _resolve_oracle_runtime_settings(resolved_project)
+                if selected_graph_backend == GRAPH_BACKEND_ORACLE and resolved_project is not None
+                else None
+            )
             builder = GraphBuilderService(
                 backend=selected_backend,
                 graph_backend=selected_graph_backend,
                 api_key=Config.ZEP_API_KEY,
                 project_id=normalized_project_id or None,
+                oracle_pool_min=oracle_runtime["oracle_pool_min"] if oracle_runtime is not None else None,
+                oracle_pool_max=oracle_runtime["oracle_pool_max"] if oracle_runtime is not None else None,
+                oracle_pool_increment=oracle_runtime["oracle_pool_increment"]
+                if oracle_runtime is not None
+                else None,
+                oracle_max_coroutines=oracle_runtime["oracle_max_coroutines"]
+                if oracle_runtime is not None
+                else None,
             )
             return builder.get_graph_data(
                 graph_id,

@@ -161,7 +161,14 @@ def _create_graphiti_client(
             oracle_driver_kwargs["max_coroutines"] = max_coroutines
         if connect_kwargs:
             oracle_driver_kwargs["connect_kwargs"] = connect_kwargs
-        logger.info("Create Graphiti Oracle Client: %s", dsn)
+        logger.info(
+            "Create Graphiti Oracle Client for project_id=%s (pool_min=%s pool_max=%s pool_increment=%s max_coroutines=%s)",
+            normalized_project_id,
+            connect_kwargs.get("min"),
+            connect_kwargs.get("max"),
+            connect_kwargs.get("increment"),
+            oracle_driver_kwargs.get("max_coroutines"),
+        )
         return GraphitiClient(
             graph_driver=OraclePGDriver(**oracle_driver_kwargs),
             embedding_model=embedding_model,
