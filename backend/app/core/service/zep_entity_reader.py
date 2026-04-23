@@ -26,7 +26,10 @@ Loads nodes from a Zep graph and keeps nodes whose labels match defined entity t
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-from app.core.backend_client_factory.client_factory import create_zep_client
+from app.core.backend_client_factory.client_factory import (
+    CLIENT_PROFILE_NON_BUILD_GRAPH,
+    get_or_create_zep_client,
+)
 from app.core.backend_client_factory.schema import ZepClientAdapter
 from app.core.config import Config
 from app.core.schemas.zep_operation import EntityNode, FilteredEntities
@@ -65,11 +68,12 @@ class ZepEntityReader:
             raise ValueError(
                 "ZepEntityReader requires project_id when Oracle graph backend is enabled."
             )
-        self.client: ZepClientAdapter = create_zep_client(
+        self.client: ZepClientAdapter = get_or_create_zep_client(
             backend=Config.ZEP_BACKEND,
             api_key=self.api_key,
             graph_backend=self.graph_backend,
             project_id=self.project_id,
+            client_profile=CLIENT_PROFILE_NON_BUILD_GRAPH,
         )
     
     def _call_with_retry(

@@ -32,7 +32,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core.backend_client_factory.client_factory import create_zep_client
+from app.core.backend_client_factory.client_factory import (
+    CLIENT_PROFILE_NON_BUILD_GRAPH,
+    get_or_create_zep_client,
+)
 from app.core.backend_client_factory.schema import ZepClientAdapter
 from app.core.config import Config
 from app.core.langfuse_versioning.prompt_provider import PromptProvider, make_prompt_provider
@@ -113,11 +116,12 @@ class ZepToolsService:
             raise ValueError(
                 "ZepToolsService requires project_id when Oracle graph backend is enabled."
             )
-        self.client: ZepClientAdapter = create_zep_client(
+        self.client: ZepClientAdapter = get_or_create_zep_client(
             backend=Config.ZEP_BACKEND,
             api_key=self.api_key,
             graph_backend=self.graph_backend,
             project_id=self.project_id,
+            client_profile=CLIENT_PROFILE_NON_BUILD_GRAPH,
         )
         # Lazy LLM for InsightForge sub-queries
         self._llm_provider = llm_provider

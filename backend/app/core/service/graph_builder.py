@@ -34,7 +34,10 @@ from typing import Any, Optional
 from zep_cloud import EntityEdgeSourceTarget
 
 from app.core.config import Config
-from app.core.backend_client_factory.client_factory import create_zep_client
+from app.core.backend_client_factory.client_factory import (
+    CLIENT_PROFILE_NON_BUILD_GRAPH,
+    get_or_create_zep_client,
+)
 from app.core.backend_client_factory.schema import ZepClientAdapter
 from app.core.managers.task_manager import TaskManager
 from app.core.schemas.task import TaskStatus
@@ -71,6 +74,7 @@ class GraphBuilderService:
         oracle_pool_max: int | None = None,
         oracle_pool_increment: int | None = None,
         oracle_max_coroutines: int | None = None,
+        client_profile: str = CLIENT_PROFILE_NON_BUILD_GRAPH,
     ):
         self.backend = backend
         self.graph_backend = graph_backend
@@ -82,9 +86,10 @@ class GraphBuilderService:
         self.oracle_pool_max = oracle_pool_max
         self.oracle_pool_increment = oracle_pool_increment
         self.oracle_max_coroutines = oracle_max_coroutines
+        self.client_profile = str(client_profile or "").strip().lower() or CLIENT_PROFILE_NON_BUILD_GRAPH
 
         # If caller provides a client, we trust it and only validate interface shape/signatures.
-        self.client: ZepClientAdapter = client or create_zep_client(
+        self.client: ZepClientAdapter = client or get_or_create_zep_client(
             backend=self.backend,
             api_key=self.api_key,
             graph_backend=self.graph_backend,
@@ -95,6 +100,7 @@ class GraphBuilderService:
             oracle_pool_max=self.oracle_pool_max,
             oracle_pool_increment=self.oracle_pool_increment,
             oracle_max_coroutines=self.oracle_max_coroutines,
+            client_profile=self.client_profile,
         )
         self.task_manager = TaskManager()
 

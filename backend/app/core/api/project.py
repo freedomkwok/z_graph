@@ -1367,6 +1367,7 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                     oracle_max_coroutines=oracle_max_coroutines
                     if resolved_graph_backend == GRAPH_BACKEND_ORACLE
                     else None,
+                    client_profile="build_graph",
                 )
 
                 if override_graph and resolved_graph_id:
@@ -1796,6 +1797,7 @@ def get_graph_data(
                 oracle_max_coroutines=oracle_runtime["oracle_max_coroutines"]
                 if oracle_runtime is not None
                 else None,
+                client_profile="non_build_graph",
             )
             return builder.get_graph_data(
                 graph_id,
@@ -1865,6 +1867,7 @@ def delete_graph(
             graph_backend=resolved_graph_backend,
             api_key=Config.ZEP_API_KEY,
             project_id=normalized_project_id or None,
+            client_profile="non_build_graph",
         )
         builder.delete_graph(graph_id)
         return {
