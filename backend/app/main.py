@@ -83,8 +83,32 @@ def _configure_graphiti_core_logging() -> None:
     setattr(lib, "_z_graph_logging_configured", True)
 
 
+def _configure_z_graph_logging() -> None:
+    """Ensure z_graph logs include timestamp/level/name prefix."""
+    app_logger = logging.getLogger("z_graph")
+    if getattr(app_logger, "_z_graph_logging_configured", False):
+        return
+
+    raw = (os.getenv("Z_GRAPH_LOG_LEVEL") or os.getenv("LOG_LEVEL") or "INFO").strip().upper()
+    level = getattr(logging, raw, None)
+    if level is None or not isinstance(level, int):
+        level = logging.INFO
+
+    app_logger.setLevel(level)
+    if not app_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setLevel(level)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+        )
+        app_logger.addHandler(handler)
+    app_logger.propagate = False
+    setattr(app_logger, "_z_graph_logging_configured", True)
+
+
 @app.on_event("startup")
 def initialize_project_storage() -> None:
+    _configure_z_graph_logging()
     _configure_graphiti_core_logging()
     ProjectManager.initialize_storage()
     PromptLabelManager.initialize_labels()

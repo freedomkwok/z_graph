@@ -293,7 +293,7 @@ class GraphitiClient(ZepClientAdapter):
         small_model = os.environ.get('GRAPHITI_LLM_SMALL_MODEL') or None
 
         temperature = float(os.environ.get('GRAPHITI_LLM_TEMPERATURE', '0') or '0')
-        max_tokens = int(os.environ.get('GRAPHITI_LLM_MAX_TOKENS', '8192') or '8192')
+        max_tokens = int(os.environ.get('GRAPHITI_LLM_MAX_TOKENS', '50000') or '50000')
 
         config = LLMConfig(
             api_key=api_key,

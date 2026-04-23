@@ -23,12 +23,15 @@ SOFTWARE.
 from __future__ import annotations
 
 import json
+import logging
+import time
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 _POSTGRES_SCHEMA_INITIALIZED = False
+logger = logging.getLogger("z_graph.db_query")
 
 
 def _connect_postgres(connection_string: str):
@@ -133,6 +136,8 @@ def merge_project_data_json_fields(
     payload = dict(fields or {})
     payload["updated_at"] = now_iso
 
+    started_at = time.perf_counter()
+    affected_rows = 0
     with _connect_postgres(connection_string) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -145,7 +150,15 @@ def merge_project_data_json_fields(
                 """,
                 (json.dumps(payload, ensure_ascii=False), now_iso, normalized_id),
             )
+            affected_rows = cur.rowcount
         conn.commit()
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+    logger.info(
+        "DB save projects(project_data merge) project_id=%s affected_rows=%s elapsed_ms=%s",
+        normalized_id,
+        affected_rows,
+        elapsed_ms,
+    )
 
 
 def upsert_project(
@@ -164,6 +177,7 @@ def upsert_project(
 ) -> None:
     computed_has_built_graph = str(project_data.get("status") or "").strip().lower() == "graph_completed"
 
+    started_at = time.perf_counter()
     with _connect_postgres(connection_string) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -223,6 +237,12 @@ def upsert_project(
                 ),
             )
         conn.commit()
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+    logger.info(
+        "DB save projects(upsert) project_id=%s elapsed_ms=%s",
+        project_id,
+        elapsed_ms,
+    )
 
 
 def get_project_data(connection_string: str, project_id: str) -> dict[str, Any] | None:
@@ -850,6 +870,8 @@ def insert_graph_build_data(
     )
     resolved_resume_state = str(resume_state or "").strip() or "new"
 
+    started_at = time.perf_counter()
+    affected_rows = 0
     with _connect_postgres(connection_string) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -919,7 +941,16 @@ def insert_graph_build_data(
                     resolved_updated_at,
                 ),
             )
+            affected_rows = cur.rowcount
         conn.commit()
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+    logger.info(
+        "DB save graph_build(insert) task_id=%s status=%s affected_rows=%s elapsed_ms=%s",
+        task_id,
+        status,
+        affected_rows,
+        elapsed_ms,
+    )
 
 
 def update_graph_build_status(
@@ -945,6 +976,7 @@ def update_graph_build_status(
     if not normalized_task_id:
         return False
 
+    started_at = time.perf_counter()
     with _connect_postgres(connection_string) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -987,6 +1019,14 @@ def update_graph_build_status(
             )
             updated = cur.rowcount > 0
         conn.commit()
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+    logger.info(
+        "DB save graph_build(update_status) task_id=%s status=%s updated=%s elapsed_ms=%s",
+        normalized_task_id,
+        status,
+        updated,
+        elapsed_ms,
+    )
     return updated
 
 
@@ -1174,6 +1214,7 @@ def update_graph_build_checkpoint(
     now_iso = str(updated_at or datetime.now().isoformat())
     resolved_last_idx = int(last_completed_batch_index)
 
+    started_at = time.perf_counter()
     with _connect_postgres(connection_string) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -1203,4 +1244,12 @@ def update_graph_build_checkpoint(
             )
             updated = cur.rowcount > 0
         conn.commit()
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+    logger.info(
+        "DB save graph_build(update_checkpoint) task_id=%s last_completed_batch_index=%s updated=%s elapsed_ms=%s",
+        normalized_task_id,
+        resolved_last_idx,
+        updated,
+        elapsed_ms,
+    )
     return updated
