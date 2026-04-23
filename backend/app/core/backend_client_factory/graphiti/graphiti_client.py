@@ -343,8 +343,6 @@ class GraphitiClient(ZepClientAdapter):
         logger.info(f"Graph metadata recorded: graph_id={graph_id}, name={name}")
 
     def delete_graph(self, graph_id: str) -> None:
-        self._ensure_graph_constraints(graph_id)
-
         async def _delete():
             graph_ops = self._driver.graph_ops
             if graph_ops is not None:
@@ -369,7 +367,6 @@ class GraphitiClient(ZepClientAdapter):
         edges: Optional[Dict[str, Any]] = None
     ) -> None:
         for graph_id in graph_ids:
-            self._ensure_graph_constraints(graph_id)
             self._set_cached_ontology(graph_id, entities, edges)
             logger.info(
                 f"Ontology has been cached (MVP no-op): graph_id={graph_id}, "
@@ -459,8 +456,6 @@ class GraphitiClient(ZepClientAdapter):
     # ==================== Episode operations ====================
 
     def add_episode(self, graph_id: str, data: str, episode_type: str = "text") -> str:
-        self._ensure_graph_constraints(graph_id)
-
         from graphiti_core.nodes import EpisodeType
 
         # Map episode_type.
@@ -491,8 +486,6 @@ class GraphitiClient(ZepClientAdapter):
         graph_id: str,
         episodes: List[Dict[str, Any]]
     ) -> List[str]:
-        self._ensure_graph_constraints(graph_id)
-
         from graphiti_core.nodes import EpisodeType
         from graphiti_core.utils.bulk_utils import RawEpisode
 
@@ -535,8 +528,6 @@ class GraphitiClient(ZepClientAdapter):
         return True
 
     def get_all_nodes(self, graph_id: str) -> List[GraphNode]:
-        self._ensure_graph_constraints(graph_id)
-
         async def _get_nodes():
             node_ops = self._driver.entity_node_ops
             if node_ops is None:
@@ -582,8 +573,6 @@ class GraphitiClient(ZepClientAdapter):
         return [self._graphiti_edge_to_graph_edge(edge) for edge in raw_edges]
 
     def get_all_edges(self, graph_id: str) -> List[GraphEdge]:
-        self._ensure_graph_constraints(graph_id)
-
         async def _get_edges():
             edge_ops = self._driver.entity_edge_ops
             if edge_ops is None:
@@ -626,7 +615,6 @@ class GraphitiClient(ZepClientAdapter):
         Note: reranker="cross_encoder" requires OpenAI API to support logprobs,
         non-standard API (e.g. DashScope) will automatically downgrade to rrf.
         """
-        self._ensure_graph_constraints(graph_id)
         from graphiti_core.search.search_config_recipes import (
             COMBINED_HYBRID_SEARCH_CROSS_ENCODER,
             EDGE_HYBRID_SEARCH_RRF,
