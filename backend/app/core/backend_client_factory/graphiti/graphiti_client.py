@@ -343,7 +343,7 @@ class GraphitiClient(ZepClientAdapter):
         logger.info(f"Graph metadata recorded: graph_id={graph_id}, name={name}")
 
     def delete_graph(self, graph_id: str) -> None:
-        self._ensure_initialized()
+        self._ensure_graph_constraints(graph_id)
 
         async def _delete():
             graph_ops = self._driver.graph_ops
@@ -535,7 +535,7 @@ class GraphitiClient(ZepClientAdapter):
         return True
 
     def get_all_nodes(self, graph_id: str) -> List[GraphNode]:
-        self._ensure_initialized()
+        self._ensure_graph_constraints(graph_id)
 
         async def _get_nodes():
             node_ops = self._driver.entity_node_ops
@@ -550,8 +550,6 @@ class GraphitiClient(ZepClientAdapter):
         return [self._graphiti_node_to_graph_node(node) for node in raw_nodes]
 
     def get_node(self, node_uuid: str) -> Optional[GraphNode]:
-        self._ensure_initialized()
-
         async def _get_node():
             node_ops = self._driver.entity_node_ops
             if node_ops is None:
@@ -571,8 +569,6 @@ class GraphitiClient(ZepClientAdapter):
         return self._graphiti_node_to_graph_node(raw_node)
 
     def get_node_edges(self, node_uuid: str) -> List[GraphEdge]:
-        self._ensure_initialized()
-
         async def _get_edges():
             edge_ops = self._driver.entity_edge_ops
             if edge_ops is None:
@@ -586,7 +582,7 @@ class GraphitiClient(ZepClientAdapter):
         return [self._graphiti_edge_to_graph_edge(edge) for edge in raw_edges]
 
     def get_all_edges(self, graph_id: str) -> List[GraphEdge]:
-        self._ensure_initialized()
+        self._ensure_graph_constraints(graph_id)
 
         async def _get_edges():
             edge_ops = self._driver.entity_edge_ops
@@ -630,7 +626,7 @@ class GraphitiClient(ZepClientAdapter):
         Note: reranker="cross_encoder" requires OpenAI API to support logprobs,
         non-standard API (e.g. DashScope) will automatically downgrade to rrf.
         """
-        self._ensure_initialized()
+        self._ensure_graph_constraints(graph_id)
         from graphiti_core.search.search_config_recipes import (
             COMBINED_HYBRID_SEARCH_CROSS_ENCODER,
             EDGE_HYBRID_SEARCH_RRF,
