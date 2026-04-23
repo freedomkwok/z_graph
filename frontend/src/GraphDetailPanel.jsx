@@ -1,6 +1,14 @@
+import DockSideToggle from "./components/DockSideToggle";
+
 export default function GraphDetailPanel({
   selectedItem,
   closeDetail,
+  detailPanelSide = "right",
+  toggleDetailPanelSide,
+  panelRef,
+  panelStyle,
+  onBeginDrag,
+  isCustomPosition = false,
   formatDateTime,
   formatFieldValue,
   nodeEdgeStatsByNode,
@@ -9,8 +17,18 @@ export default function GraphDetailPanel({
   if (!selectedItem) return null;
 
   return (
-    <aside className="graph-detail-panel">
-      <div className="graph-detail-head">
+    <aside
+      className={`graph-detail-panel ${
+        isCustomPosition
+          ? "graph-detail-panel-custom"
+          : detailPanelSide === "left"
+            ? "graph-detail-panel-left"
+            : "graph-detail-panel-right"
+      }`}
+      ref={panelRef}
+      style={panelStyle}
+    >
+      <div className="graph-detail-head" onMouseDown={onBeginDrag}>
         <div className="graph-detail-title-wrap">
           <span className="graph-detail-title">
             {selectedItem.type === "node" ? "Node Details" : "Relationship"}
@@ -24,9 +42,18 @@ export default function GraphDetailPanel({
             </span>
           )}
         </div>
-        <button className="graph-detail-close" type="button" onClick={closeDetail}>
-          ×
-        </button>
+        <div className="graph-detail-head-actions">
+          <DockSideToggle
+            className="graph-detail-dock-toggle"
+            isRight={detailPanelSide === "right"}
+            onToggle={toggleDetailPanelSide}
+            rightTitle="Move detail panel to left"
+            leftTitle="Move detail panel to right"
+          />
+          <button className="graph-detail-close" type="button" onClick={closeDetail}>
+            ×
+          </button>
+        </div>
       </div>
 
       <div className="graph-detail-body">

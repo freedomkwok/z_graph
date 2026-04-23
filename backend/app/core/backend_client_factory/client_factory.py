@@ -1,3 +1,25 @@
+"""
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 import logging
 from typing import Optional
 
@@ -15,6 +37,13 @@ def create_zep_client(
     graphdb_user: Optional[str] = None,
     graphdb_password: Optional[str] = None,
     graph_backend: Optional[str] = None,
+    graphiti_embedding_model: Optional[str] = None,
+    project_id: Optional[str] = None,
+    enable_otel_tracing: Optional[bool] = None,
+    oracle_pool_min: Optional[int] = None,
+    oracle_pool_max: Optional[int] = None,
+    oracle_pool_increment: Optional[int] = None,
+    oracle_max_coroutines: Optional[int] = None,
 ) -> ZepClientAdapter:
     normalized_graph_backend = str(graph_backend or '').strip().lower()
     normalized_backend = str(backend or Config.ZEP_BACKEND or '').strip().lower()
@@ -32,6 +61,13 @@ def create_zep_client(
             graphdb_user,
             graphdb_password,
             graphiti_db=resolved_graphiti_db,
+            embedding_model=graphiti_embedding_model,
+            project_id=project_id,
+            enable_otel_tracing=enable_otel_tracing,
+            oracle_pool_min=oracle_pool_min,
+            oracle_pool_max=oracle_pool_max,
+            oracle_pool_increment=oracle_pool_increment,
+            oracle_max_coroutines=oracle_max_coroutines,
         )
     elif normalized_backend == 'zep_cloud':
         return _create_cloud_client(api_key)
@@ -59,6 +95,13 @@ def _create_graphiti_client(
     graphdb_password: Optional[str] = None,
     dsn: Optional[str] = None,
     graphiti_db: Optional[str] = None,
+    embedding_model: Optional[str] = None,
+    project_id: Optional[str] = None,
+    enable_otel_tracing: Optional[bool] = None,
+    oracle_pool_min: Optional[int] = None,
+    oracle_pool_max: Optional[int] = None,
+    oracle_pool_increment: Optional[int] = None,
+    oracle_max_coroutines: Optional[int] = None,
 ) -> ZepClientAdapter:
     """Graphiti Local Client"""
 
@@ -80,19 +123,49 @@ def _create_graphiti_client(
             raise ValueError(
                 "Oracle Graphiti mode requires GRAPHDB_DSN, GRAPHDB_USER, and GRAPHDB_PASSWORD."
             )
-        from graphiti_core.driver.oracle_driver import OracleDriver
+        normalized_project_id = str(project_id or "").strip()
+        if not normalized_project_id:
+            raise ValueError(
+                "Oracle Graphiti mode requires project_id. "
+                "Pass project_id to create_zep_client(...) for project-scoped operations."
+            )
+        from graphiti_core.driver.oracle_pg_driver import OraclePGDriver
+        pool_min = oracle_pool_min if oracle_pool_min is not None else Config.ORACLE_POOL_MIN
+        pool_max = oracle_pool_max if oracle_pool_max is not None else Config.ORACLE_POOL_MAX
+        pool_increment = (
+            oracle_pool_increment
+            if oracle_pool_increment is not None
+            else Config.ORACLE_POOL_INCREMENT
+        )
+        max_coroutines = (
+            oracle_max_coroutines
+            if oracle_max_coroutines is not None
+            else Config.ORACLE_MAX_COROUTINES
+        )
+        connect_kwargs: dict[str, int] = {}
+        if isinstance(pool_min, int) and pool_min > 0:
+            connect_kwargs["min"] = pool_min
+        if isinstance(pool_max, int) and pool_max > 0:
+            connect_kwargs["max"] = pool_max
+        if isinstance(pool_increment, int) and pool_increment > 0:
+            connect_kwargs["increment"] = pool_increment
+
+        oracle_driver_kwargs: dict[str, object] = {
+            "dsn": dsn,
+            "user": user,
+            "password": password,
+            "graph_id": normalized_project_id,
+            "log_queries": Config.ORACLE_LOG_QUERIES,
+        }
+        if isinstance(max_coroutines, int) and max_coroutines > 0:
+            oracle_driver_kwargs["max_coroutines"] = max_coroutines
+        if connect_kwargs:
+            oracle_driver_kwargs["connect_kwargs"] = connect_kwargs
         logger.info("Create Graphiti Oracle Client: %s", dsn)
         return GraphitiClient(
-            graph_driver=OracleDriver(
-                dsn=dsn,
-                user=user,
-                password=password,
-                use_rdf=Config.ORACLE_USE_RDF,
-                rdf_network_owner=Config.ORACLE_RDF_NETWORK_OWNER,
-                rdf_network_name=Config.ORACLE_RDF_NETWORK_NAME,
-                rdf_graph_name=Config.ORACLE_RDF_GRAPH_NAME,
-                rdf_tablespace=Config.ORACLE_RDF_TABLESPACE,
-            )
+            graph_driver=OraclePGDriver(**oracle_driver_kwargs),
+            embedding_model=embedding_model,
+            enable_otel_tracing=enable_otel_tracing,
         )
 
     if not has_uri_config:
@@ -104,6 +177,8 @@ def _create_graphiti_client(
         graphdb_uri=uri,
         graphdb_user=user,
         graphdb_password=password,
+        embedding_model=embedding_model,
+        enable_otel_tracing=enable_otel_tracing,
     )
 
 import threading

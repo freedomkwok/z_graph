@@ -1,5 +1,34 @@
 #!/usr/bin/env python3
-"""Sync markdown prompts into Langfuse for backend prompt directories."""
+"""
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Sync local prompt files into Langfuse with canonical prompt namespaces.
+
+Key normalization behavior:
+- ontology_section/labels prompt names are canonicalized to:
+  - ontology_section/labels/production/<PROMPT_NAME>
+  - ontology_section/labels/proj_<id>/<PROMPT_NAME>
+- Any non-project label folder under ontology_section/labels is treated as a
+  label metadata source, not a prompt namespace folder.
+"""
 
 from __future__ import annotations
 
@@ -13,32 +42,22 @@ from urllib.parse import quote
 
 import httpx
 
+from app.core.langfuse_versioning.zepgraph_langfuse_sync_policy import (
+    DEFAULT_ZEPGRAPH_LANGFUSE_SYNC_POLICY,
+)
+
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SOURCES = (
-    "app/core/langfuse_versioning/ontology_section",
-    "app/core/langfuse_versioning/sub_queries",
-    "app/core/langfuse_versioning/fallback_entities",
-    "app/core/langfuse_versioning/auto_label_generator",
-)
+POLICY = DEFAULT_ZEPGRAPH_LANGFUSE_SYNC_POLICY
 LANGFUSE_PROMPT_REF_RE = re.compile(r"@@@langfusePrompt:([^@]+)@@@")
-LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
-PROMPT_STEM_ALIASES = {
-    "relations_in_system_prompt copy": "RELATIONS_IN_SYSTEM_PROMPT",
-}
-SYNC_PATH_ALLOWLIST = (
-    re.compile(r"^ontology_section/prompts/[^/]+/[^/]+\.(md|json)$"),
-    re.compile(r"^ontology_section/labels/[^/]+/[^/]+\.(md|json)$"),
-    re.compile(r"^sub_queries/.+\.(md|json)$"),
-    re.compile(r"^fallback_entities/.+\.(md|json)$"),
-    # Label-structured prompt folders.
-    # Example: auto_label_generator/prompts/production/ENTITY_EDGE_GENERATOR.md
-    re.compile(r"^auto_label_generator/prompts/[^/]+/.+\.(md|json)$"),
-    re.compile(r"^auto_label_generator/labels/[^/]+/.+\.(md|json)$"),
-)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Sync prompt markdown files to Langfuse.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Sync local prompt files to Langfuse with namespace normalization "
+            "(including ontology labels production/project canonicalization)."
+        )
+    )
     parser.add_argument(
         "--repo-root",
         default=str(DEFAULT_REPO_ROOT),
@@ -63,7 +82,10 @@ def parse_args() -> argparse.Namespace:
         "--label",
         action="append",
         default=[],
-        help="Optional Langfuse label(s), can be passed multiple times.",
+        help=(
+            "Optional Langfuse label(s), can be passed multiple times. "
+            "Merged with labels inferred from local folder structure."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -110,6 +132,45 @@ def normalize_label(label: str) -> str:
     return label.strip().lower()
 
 
+def _looks_like_project_scope_segment(value: str) -> bool:
+    return bool(POLICY.project_scope_pattern.fullmatch(str(value or "").strip().lower()))
+
+
+def _is_supported_ontology_labels_path(normalized_relative_path: str) -> bool:
+    parts = [part for part in str(normalized_relative_path or "").split("/") if part]
+    if len(parts) < 4:
+        return False
+    if not (parts[0] == "ontology_section" and parts[1] == "labels"):
+        return False
+
+    # Canonical:
+    #   ontology_section/labels/production/<PROMPT_NAME>
+    #   ontology_section/labels/<project_id>/<PROMPT_NAME>
+    # Legacy source compatibility:
+    #   ontology_section/labels/<label>/<PROMPT_NAME>
+    #   ontology_section/labels/<label>/<project_id>/<PROMPT_NAME>
+    if len(parts) == 4:
+        scope_segment = normalize_label(parts[2])
+        if not scope_segment:
+            return False
+        if scope_segment == "production":
+            return True
+        if _looks_like_project_scope_segment(scope_segment):
+            return True
+        return bool(POLICY.label_pattern.fullmatch(scope_segment))
+
+    if len(parts) == 5:
+        label_segment = normalize_label(parts[2])
+        project_segment = normalize_label(parts[3])
+        if not label_segment or not project_segment:
+            return False
+        if not POLICY.label_pattern.fullmatch(label_segment):
+            return False
+        return _looks_like_project_scope_segment(project_segment)
+
+    return False
+
+
 def _merge_labels(*label_groups: Iterable[str]) -> list[str]:
     merged: list[str] = []
     for group in label_groups:
@@ -120,26 +181,73 @@ def _merge_labels(*label_groups: Iterable[str]) -> list[str]:
     return merged
 
 
+def _is_global_production_namespace_prompt(prompt_name: str) -> bool:
+    parts = [part for part in str(prompt_name or "").strip("/").split("/") if part]
+    if len(parts) < 3:
+        return False
+
+    # Standard prompts namespaces:
+    #   <category>/prompts/<label>/<PROMPT_NAME>
+    prompts_namespaces = {"ontology_section", "auto_label_generator", "sub_queries"}
+    if len(parts) >= 4 and parts[0] in prompts_namespaces and parts[1] == "prompts":
+        return parts[2] == "production"
+
+    # Legacy non-prompts layouts kept for backward compatibility.
+    if parts[0] in {"sub_queries", "fallback_entities"}:
+        return parts[1] == "production"
+    return False
+
+
+def _ensure_required_global_labels(prompt_name: str, labels: list[str]) -> list[str]:
+    next_labels = _merge_labels(labels)
+    if _is_global_production_namespace_prompt(prompt_name):
+        next_labels = _merge_labels(next_labels, ["production"])
+    return next_labels
+
+
 def _infer_labels_from_file_path(relative_file_path: Path, sources: Iterable[str]) -> list[str]:
     raw_relative = _relative_path_without_source_prefix(relative_file_path, sources)
     parts = [part for part in raw_relative.split("/") if part]
 
     # Local structure:
     #   ontology_section/prompts/<label>/<PROMPT_NAME>
+    #   ontology_section/prompts/<project_id>/<label>/<PROMPT_NAME>
     # Upload keeps this folder order.
     if len(parts) >= 4 and parts[0] == "ontology_section" and parts[1] == "prompts":
+        if len(parts) >= 5 and _looks_like_project_scope_segment(parts[2]):
+            label_candidate = normalize_label(parts[3])
+            if _looks_like_project_scope_segment(label_candidate):
+                return []
+            if not POLICY.label_pattern.fullmatch(label_candidate):
+                return []
+            return [label_candidate]
         label_candidate = normalize_label(parts[2])
-        if not LABEL_PATTERN.fullmatch(label_candidate):
+        if _looks_like_project_scope_segment(label_candidate):
+            return []
+        if not POLICY.label_pattern.fullmatch(label_candidate):
             return []
         return [label_candidate]
 
-    # Local structure:
+    # Local structure (canonical and legacy):
+    #   ontology_section/labels/production/<PROMPT_NAME>
+    #   ontology_section/labels/<project_id>/<PROMPT_NAME>
+    #   ontology_section/labels/<project_id>/<label>/<PROMPT_NAME>
     #   ontology_section/labels/<label>/<PROMPT_NAME>
-    # Upload structure:
-    #   ontology_section/labels/<PROMPT_NAME> with Langfuse label=<label>.
+    #   ontology_section/labels/<label>/<project_id>/<PROMPT_NAME>
+    # Upload keeps only production/project folder scope while label stays in
+    # Langfuse label metadata.
     if len(parts) >= 4 and parts[0] == "ontology_section" and parts[1] == "labels":
+        if len(parts) >= 5 and _looks_like_project_scope_segment(parts[2]):
+            label_candidate = normalize_label(parts[3])
+            if _looks_like_project_scope_segment(label_candidate):
+                return []
+            if not POLICY.label_pattern.fullmatch(label_candidate):
+                return []
+            return [label_candidate]
         label_candidate = normalize_label(parts[2])
-        if not LABEL_PATTERN.fullmatch(label_candidate):
+        if _looks_like_project_scope_segment(label_candidate):
+            return []
+        if not POLICY.label_pattern.fullmatch(label_candidate):
             return []
         return [label_candidate]
 
@@ -147,22 +255,46 @@ def _infer_labels_from_file_path(relative_file_path: Path, sources: Iterable[str
         return []
 
     root_category = parts[0]
+    # sub_queries now uses:
+    #   sub_queries/prompts/<label>/<PROMPT_NAME>
+    # Keep backward compatibility with old:
+    #   sub_queries/<label>/<PROMPT_NAME>
+    if root_category == "sub_queries" and len(parts) >= 4 and parts[1] == "prompts":
+        label_candidate = normalize_label(parts[2])
+        if _looks_like_project_scope_segment(label_candidate):
+            return []
+        if not POLICY.label_pattern.fullmatch(label_candidate):
+            return []
+        return [label_candidate]
+
     if root_category in {"sub_queries", "fallback_entities"}:
         label_candidate = normalize_label(parts[1])
-        if not LABEL_PATTERN.fullmatch(label_candidate):
+        if _looks_like_project_scope_segment(label_candidate):
+            return []
+        if not POLICY.label_pattern.fullmatch(label_candidate):
             return []
         return [label_candidate]
 
     # auto_label_generator follows:
     #   auto_label_generator/prompts/<label>/<PROMPT_NAME>
+    #   auto_label_generator/prompts/<project_id>/<label>/<PROMPT_NAME>
     #   auto_label_generator/labels/<label>/<PROMPT_NAME>
     if (
         root_category == "auto_label_generator"
         and len(parts) >= 4
         and parts[1] in {"prompts", "labels"}
     ):
+        if len(parts) >= 5 and _looks_like_project_scope_segment(parts[2]):
+            label_candidate = normalize_label(parts[3])
+            if _looks_like_project_scope_segment(label_candidate):
+                return []
+            if not POLICY.label_pattern.fullmatch(label_candidate):
+                return []
+            return [label_candidate]
         label_candidate = normalize_label(parts[2])
-        if not LABEL_PATTERN.fullmatch(label_candidate):
+        if _looks_like_project_scope_segment(label_candidate):
+            return []
+        if not POLICY.label_pattern.fullmatch(label_candidate):
             return []
         return [label_candidate]
 
@@ -180,7 +312,7 @@ def _normalize_source_prefixes(sources: Iterable[str]) -> list[str]:
 
 def _relative_path_without_source_prefix(relative_file_path: Path, sources: Iterable[str]) -> str:
     raw_path = relative_file_path.as_posix()
-    langfuse_root = "app/core/langfuse_versioning/"
+    langfuse_root = POLICY.langfuse_versioning_prefix
     if raw_path.startswith(langfuse_root):
         return raw_path[len(langfuse_root) :]
 
@@ -192,15 +324,92 @@ def _relative_path_without_source_prefix(relative_file_path: Path, sources: Iter
 
 
 def _normalize_folder_aliases(name: str) -> str:
-    # Drop local label folder from ontology_section prompt names.
-    # Keep Langfuse naming canonical:
-    # - ontology_section/prompts/<PROMPT_NAME> (labels in Langfuse metadata)
-    # - ontology_section/labels/<PROMPT_NAME> (labels in Langfuse metadata)
+    # Normalize global label-scoped folders to production prompt namespace while
+    # preserving actual variant via Langfuse labels. This prevents creating
+    # prompt folders like sub_queries/medical in Langfuse.
     parts = [part for part in str(name or "").split("/") if part]
-    if len(parts) >= 4 and parts[0] == "ontology_section" and parts[1] == "prompts":
-        return "/".join(["ontology_section", "prompts", *parts[3:]])
+
+    # Project-scoped auto label generator entries can be stored locally as:
+    #   auto_label_generator/prompts/<project_id>/<label>/<PROMPT_NAME>
+    #   auto_label_generator/labels/<project_id>/<label>/<PROMPT_NAME>
+    # Sync to Langfuse prompt name must stay:
+    #   auto_label_generator/<section>/<project_id>/<PROMPT_NAME>
+    # with label=<label>.
+    if (
+        len(parts) >= 5
+        and parts[0] == "auto_label_generator"
+        and parts[1] in {"prompts", "labels"}
+        and _looks_like_project_scope_segment(parts[2])
+    ):
+        nested_label = normalize_label(parts[3])
+        if nested_label and POLICY.label_pattern.fullmatch(nested_label):
+            if not _looks_like_project_scope_segment(nested_label):
+                parts = [*parts[:3], *parts[4:]]
+                return "/".join(parts)
+
+    # Project-scoped ontology prompts can be stored locally as:
+    #   ontology_section/prompts/<project_id>/<label>/<PROMPT_NAME>
+    # Sync to Langfuse prompt name must stay:
+    #   ontology_section/prompts/<project_id>/<PROMPT_NAME>
+    # with label=<label>.
+    if (
+        len(parts) >= 5
+        and parts[0] == "ontology_section"
+        and parts[1] == "prompts"
+        and _looks_like_project_scope_segment(parts[2])
+    ):
+        nested_label = normalize_label(parts[3])
+        if nested_label and POLICY.label_pattern.fullmatch(nested_label):
+            if not _looks_like_project_scope_segment(nested_label):
+                parts = [*parts[:3], *parts[4:]]
+                return "/".join(parts)
+
+    # Keep ontology label prompt names in canonical namespaces only:
+    #   ontology_section/labels/production/<PROMPT_NAME>
+    #   ontology_section/labels/<project_id>/<PROMPT_NAME>
+    # Legacy local paths are remapped:
+    #   ontology_section/labels/<project_id>/<label>/<PROMPT_NAME> -> .../<project_id>/<PROMPT_NAME>
+    #   ontology_section/labels/<label>/<PROMPT_NAME> -> .../production/<PROMPT_NAME>
+    #   ontology_section/labels/<label>/<project_id>/<PROMPT_NAME> -> .../<project_id>/<PROMPT_NAME>
     if len(parts) >= 4 and parts[0] == "ontology_section" and parts[1] == "labels":
-        return "/".join(["ontology_section", "labels", *parts[3:]])
+        first_scope_segment = normalize_label(parts[2])
+        if first_scope_segment and _looks_like_project_scope_segment(first_scope_segment):
+            if len(parts) >= 5:
+                nested_label = normalize_label(parts[3])
+                if nested_label and POLICY.label_pattern.fullmatch(nested_label):
+                    if not _looks_like_project_scope_segment(nested_label):
+                        parts = [parts[0], parts[1], first_scope_segment, *parts[4:]]
+                        return "/".join(parts)
+            return "/".join(parts)
+        if first_scope_segment and not _looks_like_project_scope_segment(first_scope_segment):
+            if first_scope_segment == "production":
+                return "/".join(parts)
+            if len(parts) >= 5 and _looks_like_project_scope_segment(parts[3]):
+                parts = [parts[0], parts[1], normalize_label(parts[3]), *parts[4:]]
+                return "/".join(parts)
+            parts[2] = "production"
+            return "/".join(parts)
+        return "/".join(parts)
+
+    normalization_rules: tuple[tuple[tuple[str, ...], int, int], ...] = (
+        (("ontology_section", "prompts"), 2, 4),
+        (("auto_label_generator", "prompts"), 2, 4),
+        (("sub_queries", "prompts"), 2, 4),
+        (("sub_queries",), 1, 3),
+        (("fallback_entities",), 1, 3),
+    )
+    for prefix_parts, label_index, minimum_length in normalization_rules:
+        if len(parts) < minimum_length:
+            continue
+        if tuple(parts[: len(prefix_parts)]) != prefix_parts:
+            continue
+        label_segment = normalize_label(parts[label_index])
+        if not label_segment or not POLICY.label_pattern.fullmatch(label_segment):
+            continue
+        if _looks_like_project_scope_segment(label_segment):
+            continue
+        parts[label_index] = "production"
+        return "/".join(parts)
     return name
 
 
@@ -208,7 +417,7 @@ def _normalize_prompt_stem_alias(stem: str) -> str:
     normalized = str(stem or "").strip()
     if not normalized:
         return normalized
-    alias = PROMPT_STEM_ALIASES.get(normalized.lower())
+    alias = POLICY.prompt_stem_aliases.get(normalized.lower())
     if alias:
         return alias
     return normalized
@@ -268,7 +477,9 @@ def _legacy_prompt_name(relative_file_path: Path, sources: Iterable[str]) -> str
 def _is_sync_allowed(relative_file_path: Path, sources: Iterable[str]) -> bool:
     normalized = _relative_path_without_source_prefix(relative_file_path, sources)
     normalized = re.sub(r"/{2,}", "/", normalized).strip("/")
-    return any(pattern.fullmatch(normalized) for pattern in SYNC_PATH_ALLOWLIST)
+    if normalized.startswith("ontology_section/labels/"):
+        return _is_supported_ontology_labels_path(normalized)
+    return any(pattern.fullmatch(normalized) for pattern in POLICY.sync_path_allowlist)
 
 
 def iter_prompt_files(repo_root: Path, sources: Iterable[str]) -> list[Path]:
@@ -500,7 +711,7 @@ def main() -> int:
         )
         return 1
 
-    sources = args.source or list(DEFAULT_SOURCES)
+    sources = args.source or list(POLICY.default_source_directories)
     prompt_files = iter_prompt_files(repo_root, sources)
     if not prompt_files:
         print("No markdown prompt files found in configured sources.")
@@ -539,7 +750,10 @@ def main() -> int:
             rel = file_path.relative_to(repo_root)
             name = normalize_prompt_name(rel, args.name_prefix, sources)
             inferred_labels = _infer_labels_from_file_path(rel, sources)
-            final_labels = _merge_labels(inferred_labels, labels)
+            final_labels = _ensure_required_global_labels(
+                name,
+                _merge_labels(inferred_labels, labels),
+            )
             labels_repr = ",".join(final_labels) if final_labels else "-"
             print(f"[DRY-RUN] {rel.as_posix()} -> {name} [labels={labels_repr}]")
             if args.clean:
@@ -582,7 +796,10 @@ def main() -> int:
             prompt_name = normalize_prompt_name(rel, args.name_prefix, sources)
             content = file_path.read_text(encoding="utf-8")
             inferred_labels = _infer_labels_from_file_path(rel, sources)
-            final_labels = _merge_labels(inferred_labels, labels)
+            final_labels = _ensure_required_global_labels(
+                prompt_name,
+                _merge_labels(inferred_labels, labels),
+            )
 
             payload = build_payload(
                 name=prompt_name,

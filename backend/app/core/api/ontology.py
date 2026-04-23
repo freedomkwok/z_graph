@@ -1,9 +1,33 @@
+"""
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 import os
 import shutil
 import threading
 import time
 import traceback
 import uuid
+import hashlib
+import json
 from datetime import datetime
 from typing import Any, Callable
 
@@ -20,6 +44,7 @@ from app.core.service.ontology_generator import OntologyGenerator
 from app.core.utils.logger import get_logger
 from app.core.utils.text_file_parser import FileParser
 from app.core.utils.text_processor import TextProcessor
+from app.core.utils.db_query import insert_ontology_version_data
 
 router = APIRouter()
 logger = get_logger("z_graph.api.ontology")
@@ -28,6 +53,10 @@ DEFAULT_MINIMUM_NODES = 10
 DEFAULT_MINIMUM_EDGES = 10
 DEV_APP_ENVS = {"dev", "development", "local"}
 SUPPORTED_GRAPH_BACKENDS = {"zep_cloud", "neo4j", "oracle"}
+
+
+class TaskCancelledError(RuntimeError):
+    """Raised when a user cancels a running ontology task."""
 
 
 class _LocalFileAdapter:
@@ -58,6 +87,18 @@ def allowed_file(filename: str) -> bool:
 
 
 def _normalize_minimum_count(value: Any, *, field_name: str, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{field_name} must be greater than 0")
+    return parsed
+
+
+def _normalize_pdf_page(value: Any, *, field_name: str, default: int | None = None) -> int | None:
     if value is None:
         return default
     try:
@@ -151,6 +192,16 @@ def _timed_task_call(
         )
 
 
+def _raise_if_task_cancelled(task_manager: TaskManager, task_id: str) -> None:
+    if task_manager.is_cancelled(task_id):
+        raise TaskCancelledError("Ontology generation cancelled by user")
+
+
+def _compute_ontology_hash(ontology: dict[str, Any]) -> str:
+    canonical = json.dumps(ontology or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 @router.post("/ontology/generate")
 def generate_ontology(
     files: list[UploadFile] = File(...),
@@ -162,6 +213,8 @@ def generate_ontology(
     prompt_label: str = Form("Production"),
     project_id: str = Form(""),
     graph_backend: str = Form(""),
+    pdf_page_from: int | None = Form(None),
+    pdf_page_to: int | None = Form(None),
 ) -> Any:
     try:
         logger.info("----------------Start generating ontology----------------")
@@ -193,8 +246,27 @@ def generate_ontology(
                 field_name="minimum_edges",
                 default=DEFAULT_MINIMUM_EDGES,
             )
+            resolved_pdf_page_from = _normalize_pdf_page(
+                pdf_page_from,
+                field_name="pdf_page_from",
+                default=None,
+            )
+            resolved_pdf_page_to = _normalize_pdf_page(
+                pdf_page_to,
+                field_name="pdf_page_to",
+                default=None,
+            )
         except ValueError as exc:
             return _error_response(400, str(exc))
+        if (
+            resolved_pdf_page_from is not None
+            and resolved_pdf_page_to is not None
+            and resolved_pdf_page_from > resolved_pdf_page_to
+        ):
+            resolved_pdf_page_from, resolved_pdf_page_to = (
+                resolved_pdf_page_to,
+                resolved_pdf_page_from,
+            )
 
         if normalized_project_id:
             existing_project = ProjectManager.get_project(normalized_project_id)
@@ -202,8 +274,17 @@ def generate_ontology(
                 return _error_response(404, f"Project not found: {normalized_project_id}")
             logger.info(f"Will reuse Project: {normalized_project_id}")
 
-        resolved_prompt_label = PromptLabelManager.ensure_label_exists(
+        resolved_prompt_label = PromptLabelManager.create_label(
             OntologyGenerator._normalize_prompt_label(prompt_label)
+        )
+        resolved_prompt_label_name = str(
+            (resolved_prompt_label or {}).get("name")
+            or OntologyGenerator._normalize_prompt_label(prompt_label)
+        )
+        resolved_prompt_label_id = (
+            int((resolved_prompt_label or {}).get("id"))
+            if (resolved_prompt_label or {}).get("id") is not None
+            else None
         )
 
         task_manager = TaskManager()
@@ -276,6 +357,7 @@ def generate_ontology(
             project = None
             created_new_project = False
             try:
+                _raise_if_task_cancelled(task_manager, task_id)
                 task_manager.update_task(
                     task_id,
                     message="Processing uploaded files",
@@ -291,6 +373,7 @@ def generate_ontology(
                 extracted_sections: list[str] = []
 
                 for index, staged_file in enumerate(staged_files, start=1):
+                    _raise_if_task_cancelled(task_manager, task_id)
                     process_progress = 15 + int((index / max(total_files, 1)) * 30)
                     task_manager.update_task(
                         task_id,
@@ -303,7 +386,11 @@ def generate_ontology(
                         },
                     )
 
-                    text = FileParser.extract_text(staged_file["path"])
+                    text = FileParser.extract_text(
+                        staged_file["path"],
+                        pdf_page_from=resolved_pdf_page_from,
+                        pdf_page_to=resolved_pdf_page_to,
+                    )
                     text = TextProcessor.preprocess_text(text)
                     if text:
                         document_texts.append(text)
@@ -324,6 +411,7 @@ def generate_ontology(
                         "step": "create_project",
                     },
                 )
+                _raise_if_task_cancelled(task_manager, task_id)
                 if normalized_project_id:
                     project = _timed_task_call(
                         task_manager,
@@ -352,7 +440,8 @@ def generate_ontology(
                     logger.info(f"Prepared Project: {project.project_id}")
 
                 project.context_requirement = requirement
-                project.prompt_label = resolved_prompt_label
+                project.prompt_label = resolved_prompt_label_name
+                project.prompt_label_id = resolved_prompt_label_id
                 project.minimum_nodes = resolved_minimum_nodes
                 project.minimum_edges = resolved_minimum_edges
                 if normalized_graph_backend:
@@ -363,6 +452,27 @@ def generate_ontology(
                     graphiti_db = str(Config.GRAPHITI_DB or "neo4j").strip().lower()
                     project.graph_backend = graphiti_db if graphiti_db in {"oracle", "neo4j"} else "neo4j"
                 project.error = None
+
+                # Persist project-level run settings as soon as Step A starts.
+                # This guarantees Simulation Requirement and related fields are saved
+                # even if ontology generation later fails for an existing project.
+                task_manager.update_task(
+                    task_id,
+                    message="Saving project settings",
+                    progress=55,
+                    progress_detail={
+                        "step": "save_project_settings",
+                        "project_id": project.project_id,
+                    },
+                )
+                _timed_task_call(
+                    task_manager,
+                    task_id,
+                    "step_a",
+                    "ProjectManager.save_project",
+                    ProjectManager.save_project,
+                    project,
+                )
 
                 task_manager.update_task(
                     task_id,
@@ -383,6 +493,7 @@ def generate_ontology(
                         "project_id": project.project_id,
                     },
                 )
+                _raise_if_task_cancelled(task_manager, task_id)
                 generator = OntologyGenerator()
                 ontology = generator.generate(
                     document_texts=document_texts,
@@ -411,6 +522,7 @@ def generate_ontology(
                 )
 
                 for staged_file in staged_files:
+                    _raise_if_task_cancelled(task_manager, task_id)
                     adapter = _LocalFileAdapter(staged_file["path"])
                     file_info = _timed_task_call(
                         task_manager,
@@ -447,6 +559,18 @@ def generate_ontology(
                 }
                 project.analysis_summary = ontology.get("analysis_summary", "")
                 project.status = ProjectStatus.ONTOLOGY_GENERATED
+                ontology_version_id = None
+                if ProjectManager._use_postgres_storage():
+                    ontology_hash = _compute_ontology_hash(project.ontology)
+                    ontology_version_row = insert_ontology_version_data(
+                        ProjectManager._get_storage_connection_string(),
+                        project_id=project.project_id,
+                        source="generated",
+                        ontology_json=project.ontology,
+                        ontology_hash=ontology_hash,
+                        created_by_task_id=task_id,
+                    )
+                    ontology_version_id = int(ontology_version_row.get("id") or 0) or None
                 _timed_task_call(
                     task_manager,
                     task_id,
@@ -469,11 +593,20 @@ def generate_ontology(
                         "analysis_summary": project.analysis_summary,
                         "files": project.files,
                         "total_text_length": project.total_text_length,
+                        "ontology_version_id": ontology_version_id,
                     },
                     progress_detail={
                         "step": "completed",
                         "project_id": project.project_id,
+                        "ontology_version_id": ontology_version_id,
                     },
+                )
+            except TaskCancelledError:
+                logger.info("Ontology Generation Cancelled: task_id=%s", task_id)
+                task_manager.update_task(
+                    task_id,
+                    status=TaskStatus.CANCELLED,
+                    message="Ontology generation cancelled by user",
                 )
             except Exception as exc:
                 if created_new_project and project is not None:

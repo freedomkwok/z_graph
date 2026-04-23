@@ -1,7 +1,29 @@
+"""
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 import base64
 import logging
 from collections.abc import Awaitable, Callable
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -100,14 +122,101 @@ def _build_graphiti_otel_tracer() -> Any | None:
         return None
 
 
-def create_graphiti_langfuse_tracer() -> Any | None:
+def _is_graphiti_compatible_otel_tracer(candidate: Any) -> bool:
+    """Graphiti tracer wrapper expects OTel tracers with start_as_current_span."""
+    return callable(getattr(candidate, "start_as_current_span", None))
+
+
+def _resolve_graphiti_otel_tracer(candidate: Any) -> Any | None:
+    """Best-effort coercion for tracer/provider wrappers returned by SDKs."""
+    if candidate is None:
+        return None
+    if _is_graphiti_compatible_otel_tracer(candidate):
+        return candidate
+
+    # Some SDKs expose a tracer provider-like object.
+    get_tracer = getattr(candidate, "get_tracer", None)
+    if callable(get_tracer):
+        try:
+            resolved = get_tracer("graphiti")
+            if _is_graphiti_compatible_otel_tracer(resolved):
+                return resolved
+        except Exception:
+            logger.debug("Failed to resolve tracer from provider wrapper", exc_info=True)
+
+    # Some SDK wrappers nest the actual tracer object.
+    for attr_name in ("tracer", "_tracer", "otel_tracer", "_otel_tracer"):
+        nested = getattr(candidate, attr_name, None)
+        if _is_graphiti_compatible_otel_tracer(nested):
+            return nested
+
+    return None
+
+
+class _LangfuseObservationSpanAdapter:
+    """Minimal span-like adapter expected by graphiti_core OpenTelemetry wrapper."""
+
+    def __init__(self, observation: Any) -> None:
+        self._observation = observation
+        self._metadata: dict[str, Any] = {}
+
+    def _safe_update(self, **kwargs: Any) -> None:
+        try:
+            updater = getattr(self._observation, "update", None)
+            if callable(updater):
+                updater(**kwargs)
+        except Exception:
+            logger.debug("Langfuse observation update failed inside tracer adapter", exc_info=True)
+
+    def set_attributes(self, attributes: dict[str, Any]) -> None:
+        if not isinstance(attributes, dict):
+            return
+        self._metadata.update({str(k): v for k, v in attributes.items()})
+        self._safe_update(metadata=self._metadata)
+
+    def set_status(self, status: Any, description: str | None = None) -> None:
+        status_payload = {
+            "graphiti_status": str(status),
+        }
+        if description:
+            status_payload["graphiti_status_description"] = description
+        self._metadata.update(status_payload)
+        self._safe_update(metadata=self._metadata)
+
+    def record_exception(self, exception: Exception) -> None:
+        self._safe_update(output={"error": str(exception)})
+
+
+class _LangfuseTracerSpanBridge:
+    """Expose start_as_current_span() by delegating to Langfuse observations."""
+
+    def __init__(self, client: Langfuse) -> None:
+        self._client = client
+
+    @contextmanager
+    def start_as_current_span(self, name: str):
+        with self._client.start_as_current_observation(name=name, as_type="span") as observation:
+            yield _LangfuseObservationSpanAdapter(observation)
+
+
+def create_graphiti_langfuse_tracer(enable_for_request: bool | None = None) -> Any | None:
     try:
         from graphiti_core.tracer import create_tracer
     except ImportError:
         logger.debug("graphiti_core.tracer is unavailable; Graphiti tracing disabled")
         return None
 
-    dedicated_otel_tracer = _build_graphiti_otel_tracer()
+    # Request-level gate: defaults to global config, can be overridden by Step B toggle.
+    tracing_enabled = (
+        Config.APPLY_LANGFUSE_TO_GRAPHITI_TRACE
+        if enable_for_request is None
+        else bool(enable_for_request)
+    )
+    if not tracing_enabled:
+        logger.debug("Graphiti tracing disabled by request/global setting")
+        return None
+
+    dedicated_otel_tracer = _resolve_graphiti_otel_tracer(_build_graphiti_otel_tracer())
     if dedicated_otel_tracer is not None:
         try:
             return create_tracer(otel_tracer=dedicated_otel_tracer, span_prefix="graphiti.llm")
@@ -118,9 +227,20 @@ def create_graphiti_langfuse_tracer() -> Any | None:
     if client is None:
         return None
 
-    otel_tracer = getattr(client, "_otel_tracer", None)
+    raw_otel_tracer = getattr(client, "_otel_tracer", None)
+    if raw_otel_tracer is None:
+        raw_otel_tracer = getattr(client, "otel_tracer", None)
+
+    otel_tracer = _resolve_graphiti_otel_tracer(raw_otel_tracer)
+    if otel_tracer is None and callable(getattr(client, "start_as_current_observation", None)):
+        otel_tracer = _LangfuseTracerSpanBridge(client)
+        logger.info("Using Langfuse observation bridge tracer for Graphiti")
     if otel_tracer is None:
-        logger.debug("Langfuse client has no OTel tracer; Graphiti tracing disabled")
+        logger.warning(
+            "Langfuse tracer is unavailable/incompatible for Graphiti "
+            "(missing start_as_current_span). "
+            "Set APPLY_LANGFUSE_TO_GRAPHITI_TRACE=true to use dedicated OTLP tracer."
+        )
         return None
 
     try:

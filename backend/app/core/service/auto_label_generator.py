@@ -1,4 +1,24 @@
 """
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 Auto-generate prompt label type lists from document text.
 """
 
@@ -38,7 +58,7 @@ class AutoLabelGenerator:
     """Generate category label type lists using an LLM."""
 
     PROMPT_TEMPLATE_NAME = "auto_label_generator/prompts/production/ENTITY_EDGE_GENERATOR.md"
-    MAX_TEXT_LENGTH_FOR_LLM = 50_000
+    MAX_TEXT_LENGTH_FOR_LLM = Config.MAX_TEXT_LENGTH_FOR_LLM
 
     def __init__(
         self,
@@ -89,8 +109,8 @@ class AutoLabelGenerator:
         llm_response = self.llm.generate(
             LLMRequest(
                 messages=messages,
-                temperature=0.3,
-                max_tokens=4096,
+                temperature=0.6,
+                max_tokens=Config.MAX_TEXT_LENGTH_FOR_LLM,
                 response_format={
                     "type": "json_schema",
                     "json_schema": {
@@ -98,9 +118,8 @@ class AutoLabelGenerator:
                         "schema": AutoLabelGeneratorOutput.model_json_schema(),
                     },
                 },
-                operation="label_generation",
+                operation=f"label_gen_{label_name}",
                 metadata={
-                    "component": "auto_label_generator",
                     "label_name": label_name,
                     "project_id": str(project_id or ""),
                 },
@@ -118,7 +137,7 @@ class AutoLabelGenerator:
             validated_output = AutoLabelGeneratorOutput.model_validate(response_payload)
         except ValidationError as exc:
             raise ValueError(
-                "LLM output does not match AutoLabelGeneratorOutput schema"
+                f"LLM output does not match AutoLabelGeneratorOutput schema {str(exc)}"
             ) from exc
         return validated_output.model_dump()
 

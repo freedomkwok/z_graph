@@ -13,6 +13,10 @@ import {
   createEmptyPromptLabelTypeLists,
   createPromptLabelTypeCollapseState,
   extractOntologyTypeDrafts,
+  findTypeDefinitionByName,
+  hasTypeDefinitionChanged,
+  mergeTypeDefinition,
+  mergePromptLabelTypeLists,
   normalizePromptLabelTypeListValues,
   normalizePromptLabelTypeListsPayload,
   normalizeStringList,
@@ -86,6 +90,20 @@ const createDefaultPromptTemplatePreviewModes = () => ({
 
 const isPromptTemplateTab = (tabKey) => PROMPT_TEMPLATE_TAB_FIELDS.includes(String(tabKey ?? "").trim());
 
+const areTypeDefinitionListsEquivalent = (baseDefinitions, nextDefinitions, mode) => {
+  const baseList = Array.isArray(baseDefinitions) ? baseDefinitions : [];
+  const nextList = Array.isArray(nextDefinitions) ? nextDefinitions : [];
+  if (baseList.length !== nextList.length) return false;
+  for (const base of baseList) {
+    const baseName = normalizeTypeTag(base?.name);
+    if (!baseName) return false;
+    const next = findTypeDefinitionByName(nextList, baseName);
+    if (!next) return false;
+    if (hasTypeDefinitionChanged(base, next, mode)) return false;
+  }
+  return true;
+};
+
 export default function TaskPanel() {
   const {
     state,
@@ -104,8 +122,12 @@ export default function TaskPanel() {
     updatePromptLabelTypeLists,
     setFiles,
     runOntologyGenerate,
+    cancelOntologyTask,
     runGraphBuild,
+    cancelGraphBuild,
+    updateProjectRefreshDataWhileBuild,
     updateProjectOntologyTypes,
+    fetchProjectOntologyVersions,
     addSystemLog,
   } =
     useTaskStore();
@@ -113,6 +135,7 @@ export default function TaskPanel() {
     form,
     ontologyTask,
     graphTask,
+    graphResumeCandidate,
     systemLogs,
     promptLabelCatalog,
     viewMode,
@@ -124,12 +147,30 @@ export default function TaskPanel() {
   const promptLabelDropdownRef = useRef(null);
   const [activeStepTab, setActiveStepTab] = useState("A");
   const [activeBackendTab, setActiveBackendTab] = useState("build");
-  const [ontologyEditorMode, setOntologyEditorMode] = useState("");
+  const [ontologyEditorOpen, setOntologyEditorOpen] = useState(false);
+  const [ontologyEditorTab, setOntologyEditorTab] = useState("entity");
+  const [ontologyEditorRemoveMode, setOntologyEditorRemoveMode] = useState({
+    entity: false,
+    relationship: false,
+  });
+  const [ontologyVersions, setOntologyVersions] = useState([]);
+  const [originalEntityTypes, setOriginalEntityTypes] = useState([]);
+  const [originalEdgeTypes, setOriginalEdgeTypes] = useState([]);
+  const [ontologyMergeSelection, setOntologyMergeSelection] = useState({
+    entity: [],
+    relationship: [],
+  });
+  const [ontologyGeneratedDiff, setOntologyGeneratedDiff] = useState({
+    entity: false,
+    relationship: false,
+  });
+  const [ontologyMergeRequired, setOntologyMergeRequired] = useState(false);
   const [draftEntityTypes, setDraftEntityTypes] = useState([]);
   const [draftEdgeTypes, setDraftEdgeTypes] = useState([]);
   const [typePropertyEditor, setTypePropertyEditor] = useState({
     open: false,
     mode: "",
+    sourceList: "draft",
     index: -1,
     draft: null,
     jsonTexts: {},
@@ -155,6 +196,7 @@ export default function TaskPanel() {
     promptTemplateHeights: createDefaultPromptTemplateHeights(),
     promptTemplatePreviewModes: createDefaultPromptTemplatePreviewModes(),
     collapsedTypeSections: createPromptLabelTypeCollapseState(),
+    keepRemainingOnGenerate: false,
     syncing: false,
     generatingFromLlm: false,
     updatingPromptTemplateKey: "",
@@ -163,25 +205,90 @@ export default function TaskPanel() {
   });
   const [promptLabelDropdownOpen, setPromptLabelDropdownOpen] = useState(false);
   const [copiedEndpointPath, setCopiedEndpointPath] = useState("");
+  const [showRuntimeControls, setShowRuntimeControls] = useState(true);
   const copyEndpointToastTimerRef = useRef(null);
   const [ontologyElapsedNowMs, setOntologyElapsedNowMs] = useState(() => Date.now());
+  const [graphElapsedNowMs, setGraphElapsedNowMs] = useState(() => Date.now());
 
   const stepBUnlocked =
     ontologyTask.status === "success" || graphTask.status === "running" || graphTask.status === "success";
+  const isOntologyTaskRunning = ontologyTask.status === "running";
+  const hasOntologyTaskId = Boolean(String(ontologyTask.taskId ?? "").trim());
+  const isGraphTaskRunning =
+    graphTask.status === "running" && Boolean(String(graphTask.taskId ?? "").trim());
+  const isAnyTaskRunning = isOntologyTaskRunning || isGraphTaskRunning;
   const normalizedCurrentProjectId = String(form.projectId ?? "").trim();
   const hydratedCurrentProjectId = String(currentProject?.project_id ?? "").trim();
   const hasHydratedCurrentProject =
     Boolean(normalizedCurrentProjectId) && hydratedCurrentProjectId === normalizedCurrentProjectId;
   const isProjectCreated = hasHydratedCurrentProject;
   const canOpenOntologyEditor = Boolean(form.projectId) && ontologyTask.status !== "running";
-  const isEntityEditor = ontologyEditorMode === "entity";
+  const isEntityTab = ontologyEditorTab === "entity";
   const draftEntityTypeNames = draftEntityTypes.map((item) => normalizeTypeTag(item?.name)).filter(Boolean);
   const draftEdgeTypeNames = draftEdgeTypes.map((item) => normalizeTypeTag(item?.name)).filter(Boolean);
+  const originalEntityTypeNames = originalEntityTypes
+    .map((item) => normalizeTypeTag(item?.name))
+    .filter(Boolean);
+  const originalEdgeTypeNames = originalEdgeTypes.map((item) => normalizeTypeTag(item?.name)).filter(Boolean);
+  const changedEntityTypeNames = originalEntityTypeNames.filter((name) =>
+    hasTypeDefinitionChanged(
+      findTypeDefinitionByName(originalEntityTypes, name),
+      findTypeDefinitionByName(draftEntityTypes, name),
+      "entity",
+    ),
+  );
+  const changedEdgeTypeNames = originalEdgeTypeNames.filter((name) =>
+    hasTypeDefinitionChanged(
+      findTypeDefinitionByName(originalEdgeTypes, name),
+      findTypeDefinitionByName(draftEdgeTypes, name),
+      "relationship",
+    ),
+  );
   const isTypePropertyEditorOpen = Boolean(typePropertyEditor.open);
-  const promptLabelItems =
+  const hasOntologyGeneratedDiff = ontologyGeneratedDiff.entity || ontologyGeneratedDiff.relationship;
+  const canRunGraphBuild = graphTask.status !== "running" && stepBUnlocked && !ontologyMergeRequired;
+  const resumeTotalBatches = Number(graphResumeCandidate?.totalBatches);
+  const resumeLastCompletedBatchIndex = Number(graphResumeCandidate?.lastCompletedBatchIndex);
+  const canShowResumeGraphBuild =
+    canRunGraphBuild &&
+    !isGraphTaskRunning &&
+    graphResumeCandidate &&
+    Number.isFinite(resumeTotalBatches) &&
+    resumeTotalBatches > 0 &&
+    Number.isFinite(resumeLastCompletedBatchIndex);
+  const resumeNextBatch = canShowResumeGraphBuild
+    ? Math.min(Math.max(resumeLastCompletedBatchIndex + 2, 1), resumeTotalBatches)
+    : 1;
+  const canConfirmOntologyEditor = !savingOntologyTypes && !isTypePropertyEditorOpen && !ontologyMergeRequired;
+  const rawPromptLabelItems =
     promptLabelCatalog.items.length > 0
       ? promptLabelCatalog.items
-      : [{ name: form.promptLabel || "Production" }];
+      : [{ name: form.promptLabel || "Production", display_name: form.promptLabel || "Production" }];
+  const projectScopedDisplayNames = new Set(
+    rawPromptLabelItems
+      .filter((item) => {
+        const itemProjectId = String(item?.project_id ?? "").trim();
+        return (
+          Boolean(itemProjectId) &&
+          Boolean(normalizedCurrentProjectId) &&
+          itemProjectId.toLowerCase() === normalizedCurrentProjectId.toLowerCase()
+        );
+      })
+      .map((item) => String(item?.display_name ?? item?.name ?? "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const promptLabelItems = rawPromptLabelItems.filter((item) => {
+    const itemProjectId = String(item?.project_id ?? "").trim();
+    if (itemProjectId) {
+      return (
+        Boolean(normalizedCurrentProjectId) &&
+        itemProjectId.toLowerCase() === normalizedCurrentProjectId.toLowerCase()
+      );
+    }
+    const displayName = String(item?.display_name ?? item?.name ?? "").trim().toLowerCase();
+    if (!displayName) return false;
+    return !projectScopedDisplayNames.has(displayName);
+  });
   const hasCurrentProjectLabelAssociation = Boolean(currentProject?.prompt_label_info?.is_project_scoped);
   const hasSelectedProject = Boolean(normalizedCurrentProjectId);
   const isZepCloudBackend = String(backendHealth?.zepBackend ?? "")
@@ -196,6 +303,42 @@ export default function TaskPanel() {
     ontologyTask.status === "running" && hasOntologyStartedAtMs
       ? Math.max(0, Math.floor((ontologyElapsedNowMs - ontologyStartedAtMs) / 1000))
       : 0;
+  const taskPollIntervalMs = Math.max(500, Number(backendHealth?.taskPollIntervalMs ?? 2000) || 2000);
+  const taskPollIntervalSeconds = (taskPollIntervalMs / 1000).toFixed(
+    Number.isInteger(taskPollIntervalMs / 1000) ? 0 : 1,
+  );
+  const refreshDataPollSecondsValue = Number(form.refreshDataPollSeconds);
+  const refreshDataPollSeconds =
+    Number.isFinite(refreshDataPollSecondsValue) && refreshDataPollSecondsValue > 0
+      ? Math.floor(refreshDataPollSecondsValue)
+      : 20;
+  const graphPollIntervalSeconds = refreshDataPollSeconds;
+  const graphStartedAtMs = Date.parse(String(graphTask.startedAt ?? ""));
+  const hasGraphStartedAtMs = Number.isFinite(graphStartedAtMs);
+  const graphRunSeconds =
+    graphTask.status === "running" && hasGraphStartedAtMs
+      ? Math.max(0, Math.floor((graphElapsedNowMs - graphStartedAtMs) / 1000))
+      : 0;
+  const normalizedChunkMode = String(form.chunkMode ?? "").trim().toLowerCase();
+  const isLlmOnlyChunkMode =
+    normalizedChunkMode === "semantic" || normalizedChunkMode === "llama_index";
+  const rawGraphitiEmbeddingModelOptions = Array.isArray(backendHealth?.graphitiEmbeddingModelOptions)
+    ? backendHealth.graphitiEmbeddingModelOptions
+    : ["text-embedding-3-large"];
+  const selectedGraphBackend = String(form.graphBackend ?? "").trim().toLowerCase();
+  const isGraphitiBackend = selectedGraphBackend === "neo4j" || selectedGraphBackend === "oracle";
+  const isOracleBackend = selectedGraphBackend === "oracle";
+  const canShowRuntimeControls = selectedGraphBackend !== "zep_cloud";
+  const enableOracleRuntimeOverrides = Boolean(form.enableOracleRuntimeOverrides);
+  const resolvedGraphitiEmbeddingModel =
+    String(form.graphitiEmbeddingModel ?? "").trim() ||
+    String(backendHealth?.graphitiDefaultEmbeddingModel ?? "").trim() ||
+    "text-embedding-3-large";
+  const graphitiEmbeddingModelOptions = rawGraphitiEmbeddingModelOptions.includes(
+    resolvedGraphitiEmbeddingModel,
+  )
+    ? rawGraphitiEmbeddingModelOptions
+    : [resolvedGraphitiEmbeddingModel, ...rawGraphitiEmbeddingModelOptions];
   const activeTopPromptLabelEditorTab = String(promptLabelEditor.activeTab ?? "ontology_prompt").trim();
   const activeNodeEdgesEditorTab = String(
     promptLabelEditor.nodeEdgesEditorTab ?? "entity_edge_generator_prompt",
@@ -207,9 +350,19 @@ export default function TaskPanel() {
   const ontologyStatusLineText =
     ontologyTask.status === "running"
       ? hasOntologyStartedAtMs
-        ? `${ontologyTask.message} (running for ${ontologyRunSeconds}s; polling every 2s)`
-        : `${ontologyTask.message} (polling every 2s)`
+        ? `${ontologyTask.message} (running for ${ontologyRunSeconds}s; polling every ${taskPollIntervalSeconds}s)`
+        : `${ontologyTask.message} (polling every ${taskPollIntervalSeconds}s)`
       : ontologyTask.message;
+  const graphStatusLineText =
+    graphTask.status === "running"
+      ? hasGraphStartedAtMs
+        ? form.refreshDataWhileBuild
+          ? `${graphTask.message} (running for ${graphRunSeconds}s; polling every ${graphPollIntervalSeconds}s)`
+          : `${graphTask.message} (running for ${graphRunSeconds}s; polling paused)`
+        : form.refreshDataWhileBuild
+          ? `${graphTask.message} (polling every ${graphPollIntervalSeconds}s)`
+          : `${graphTask.message} (polling paused)`
+      : graphTask.message;
   const canGenerateFromLlmWithProjectState = hasSelectedProject || hasSelectedUploadFiles;
   const canGenerateFromLlm =
     activeTopPromptLabelEditorTab === "node_edges" && canGenerateFromLlmWithProjectState;
@@ -268,6 +421,17 @@ export default function TaskPanel() {
     }
   };
 
+  const updateOracleRuntimeField = (field, value) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) {
+      setFormField(field, "");
+      return;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return;
+    setFormField(field, String(Math.max(1, Math.floor(parsed))));
+  };
+
   useEffect(() => {
     return () => {
       if (copyEndpointToastTimerRef.current) {
@@ -287,6 +451,17 @@ export default function TaskPanel() {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [ontologyTask.status, ontologyTask.startedAt]);
+
+  useEffect(() => {
+    if (graphTask.status !== "running") {
+      return undefined;
+    }
+    setGraphElapsedNowMs(Date.now());
+    const timer = window.setInterval(() => {
+      setGraphElapsedNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [graphTask.status, graphTask.startedAt]);
 
   const handleOntologySubmit = async (event) => {
     event.preventDefault();
@@ -314,6 +489,7 @@ export default function TaskPanel() {
       promptTemplateHeights: createDefaultPromptTemplateHeights(),
       promptTemplatePreviewModes: createDefaultPromptTemplatePreviewModes(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
+      keepRemainingOnGenerate: false,
       syncing: false,
       generatingFromLlm: false,
       updatingPromptTemplateKey: "",
@@ -341,6 +517,7 @@ export default function TaskPanel() {
       promptTemplateHeights: createDefaultPromptTemplateHeights(),
       promptTemplatePreviewModes: createDefaultPromptTemplatePreviewModes(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
+      keepRemainingOnGenerate: false,
       syncing: false,
       generatingFromLlm: false,
       updatingPromptTemplateKey: "",
@@ -376,6 +553,7 @@ export default function TaskPanel() {
       promptTemplateHeights: createDefaultPromptTemplateHeights(),
       promptTemplatePreviewModes: createDefaultPromptTemplatePreviewModes(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
+      keepRemainingOnGenerate: false,
       syncing: false,
       generatingFromLlm: false,
       updatingPromptTemplateKey: "",
@@ -537,8 +715,10 @@ export default function TaskPanel() {
       notice: "",
     }));
     try {
-      await updatePromptLabelPromptTemplate(labelName, activeTab, content);
-      await fetchPromptLabels({ syncFormLabel: false });
+      await updatePromptLabelPromptTemplate(labelName, activeTab, content, {
+        projectId: normalizedCurrentProjectId,
+      });
+      await fetchPromptLabels({ syncFormLabel: false, skipDedup: true });
       setPromptLabelEditor((current) => ({
         ...current,
         updatingPromptTemplateKey: "",
@@ -628,8 +808,10 @@ export default function TaskPanel() {
           return;
         }
 
-        const synced = await syncPromptLabelPromptTemplateFromDefault(labelName, activeTab);
-        await fetchPromptLabels({ syncFormLabel: false });
+        const synced = await syncPromptLabelPromptTemplateFromDefault(labelName, activeTab, {
+          projectId: normalizedCurrentProjectId,
+        });
+        await fetchPromptLabels({ syncFormLabel: false, skipDedup: true });
         setPromptLabelEditor((current) => ({
           ...current,
           syncing: false,
@@ -647,7 +829,7 @@ export default function TaskPanel() {
             [activeTab]: true,
           },
           error: "",
-          notice: "Synced current tab from Production defaults.",
+          notice: "Synced current tab from label defaults.",
         }));
       } catch (error) {
         setPromptLabelEditor((current) => ({
@@ -669,7 +851,11 @@ export default function TaskPanel() {
       notice: "",
     }));
     try {
-      const typeResult = await getPromptLabelTypeLists("Production");
+      const normalizedLabelName = String(promptLabelEditor.labelName ?? "").trim();
+      const sourceLabelName = promptLabelEditor.isNewLabel
+        ? "Production"
+        : normalizedLabelName || "Production";
+      const typeResult = await getPromptLabelTypeLists(sourceLabelName);
       setPromptLabelEditor((current) => ({
         ...current,
         syncing: false,
@@ -677,7 +863,7 @@ export default function TaskPanel() {
         typesDraftTouched: false,
         typeLists: normalizePromptLabelTypeListsPayload(typeResult?.types),
         error: "",
-        notice: "Synced Node/Edges Extraction content from Production defaults. Save to apply changes.",
+        notice: "Synced Node/Edges Extraction content from label defaults. Save to apply changes.",
       }));
     } catch (error) {
       setPromptLabelEditor((current) => ({
@@ -752,6 +938,9 @@ export default function TaskPanel() {
           projectName: form.projectName,
           promptLabel: form.promptLabel,
           graphBackend: form.graphBackend,
+          usePdfPageRange: form.usePdfPageRange,
+          pdfPageFrom: form.pdfPageFrom,
+          pdfPageTo: form.pdfPageTo,
           files: form.files,
         });
         const draftProjectId = String(draftProject?.project_id ?? "").trim();
@@ -764,17 +953,25 @@ export default function TaskPanel() {
 
       const generatedResult = await generatePromptLabelTypeListsFromLlm(labelName, {
         projectId,
+        usePdfPageRange: form.usePdfPageRange,
+        pdfPageFrom: form.pdfPageFrom,
+        pdfPageTo: form.pdfPageTo,
         entityEdgeGeneratorPromptContent: entityEdgeGeneratorPromptOverride,
       });
       const processedDocuments = Number(generatedResult?.processed_documents ?? 0);
+      const generatedTypeLists = normalizePromptLabelTypeListsPayload(generatedResult?.types);
       setPromptLabelEditor((current) => ({
         ...current,
         generatingFromLlm: false,
         loadingTypes: false,
         typesDraftTouched: false,
-        typeLists: normalizePromptLabelTypeListsPayload(generatedResult?.types),
+        typeLists: current.keepRemainingOnGenerate
+          ? mergePromptLabelTypeLists(current.typeLists, generatedTypeLists)
+          : generatedTypeLists,
         error: "",
-        notice: `Generated from LLM using ${processedDocuments} document${processedDocuments === 1 ? "" : "s"}. Review and save.`,
+        notice: current.keepRemainingOnGenerate
+          ? `Generated from LLM using ${processedDocuments} document${processedDocuments === 1 ? "" : "s"} and kept existing loaded items. Review and save.`
+          : `Generated from LLM using ${processedDocuments} document${processedDocuments === 1 ? "" : "s"}. Review and save.`,
       }));
     } catch (error) {
       setPromptLabelEditor((current) => ({
@@ -804,11 +1001,11 @@ export default function TaskPanel() {
     ).trim();
     const activeTab = activeTopTab === "node_edges" ? activeNodeEdgesTab : activeTopTab;
     const isPromptTab = isPromptTemplateTab(activeTab);
-    const existingLabels = new Set(
-      promptLabelItems
-        .map((item) => String(item?.name ?? "").trim().toLowerCase())
-        .filter(Boolean),
-    );
+      const existingLabels = new Set(
+        promptLabelItems
+          .map((item) => String(item?.display_name ?? item?.name ?? "").trim().toLowerCase())
+          .filter(Boolean),
+      );
     if (promptLabelEditor.isNewLabel && existingLabels.has(labelName.toLowerCase())) {
       setPromptLabelEditor((current) => ({
         ...current,
@@ -861,7 +1058,9 @@ export default function TaskPanel() {
             `${activeTab.replace(/_/g, " ")} prompt must include: ${validation.missing.join(", ")}`,
           );
         }
-        await updatePromptLabelPromptTemplate(labelName, activeTab, content);
+        await updatePromptLabelPromptTemplate(labelName, activeTab, content, {
+          projectId: normalizedCurrentProjectId,
+        });
       } else {
         const payload = normalizePromptLabelTypeListsPayload(promptLabelEditor.typeLists);
         const hasCustomTypeListData = PROMPT_LABEL_TYPE_FIELDS.some(
@@ -873,10 +1072,12 @@ export default function TaskPanel() {
           const productionTypes = await getPromptLabelTypeLists("Production");
           payloadToSave = normalizePromptLabelTypeListsPayload(productionTypes?.types);
         }
-        await updatePromptLabelTypeLists(labelName, payloadToSave);
+        await updatePromptLabelTypeLists(labelName, payloadToSave, {
+          projectId: promptLabelEditor.isNewLabel ? "" : normalizedCurrentProjectId,
+        });
       }
 
-      await fetchPromptLabels({ syncFormLabel: false });
+      await fetchPromptLabels({ syncFormLabel: false, skipDedup: true });
       if (promptLabelEditor.isNewLabel) {
         await setProjectPromptLabel(labelName, { forceExact: true });
       }
@@ -903,6 +1104,7 @@ export default function TaskPanel() {
         promptTemplateHeights: createDefaultPromptTemplateHeights(),
         promptTemplatePreviewModes: createDefaultPromptTemplatePreviewModes(),
         collapsedTypeSections: createPromptLabelTypeCollapseState(),
+        keepRemainingOnGenerate: false,
         syncing: false,
         generatingFromLlm: false,
         updatingPromptTemplateKey: "",
@@ -939,7 +1141,11 @@ export default function TaskPanel() {
     }));
     try {
       if (isPromptTab) {
-        const defaultPrompt = await getPromptLabelPromptTemplate("Production", activeTab);
+        const normalizedLabelName = String(promptLabelEditor.labelName ?? "").trim();
+        const sourceLabelName = promptLabelEditor.isNewLabel
+          ? "Production"
+          : normalizedLabelName || "Production";
+        const defaultPrompt = await getPromptLabelPromptTemplate(sourceLabelName, activeTab);
         setPromptLabelEditor((current) => ({
           ...current,
           loadingTypes: false,
@@ -957,12 +1163,16 @@ export default function TaskPanel() {
             [activeTab]: true,
           },
           error: "",
-          notice: "Reverted current tab to Production defaults. Save to apply changes.",
+          notice: "Reverted current tab to label defaults. Save to apply changes.",
         }));
         return;
       }
 
-      const defaultTypeLists = await getPromptLabelTypeLists("Production");
+      const normalizedLabelName = String(promptLabelEditor.labelName ?? "").trim();
+      const sourceLabelName = promptLabelEditor.isNewLabel
+        ? "Production"
+        : normalizedLabelName || "Production";
+      const defaultTypeLists = await getPromptLabelTypeLists(sourceLabelName);
       setPromptLabelEditor((current) => ({
         ...current,
         loadingTypes: false,
@@ -970,7 +1180,7 @@ export default function TaskPanel() {
         typesDraftTouched: false,
         typeLists: normalizePromptLabelTypeListsPayload(defaultTypeLists?.types),
         error: "",
-        notice: "Reverted Node/Edges Extraction content to Production defaults. Save to apply changes.",
+        notice: "Reverted Node/Edges Extraction content to label defaults. Save to apply changes.",
       }));
     } catch (error) {
       setPromptLabelEditor((current) => ({
@@ -987,6 +1197,7 @@ export default function TaskPanel() {
     setTypePropertyEditor({
       open: false,
       mode: "",
+      sourceList: "draft",
       index: -1,
       draft: null,
       jsonTexts: {},
@@ -995,8 +1206,16 @@ export default function TaskPanel() {
     });
   };
 
-  const openTypePropertyEditor = (mode, index) => {
-    const sourceDefinitions = mode === "entity" ? draftEntityTypes : draftEdgeTypes;
+  const openTypePropertyEditor = (mode, index, sourceList = "draft") => {
+    const fromOriginal = sourceList === "original";
+    const sourceDefinitions =
+      mode === "entity"
+        ? fromOriginal
+          ? originalEntityTypes
+          : draftEntityTypes
+        : fromOriginal
+          ? originalEdgeTypes
+          : draftEdgeTypes;
     const source = sourceDefinitions[index];
     if (!source) return;
 
@@ -1011,6 +1230,7 @@ export default function TaskPanel() {
     setTypePropertyEditor({
       open: true,
       mode,
+      sourceList: fromOriginal ? "original" : "draft",
       index,
       draft: safeDraft,
       jsonTexts: {
@@ -1048,6 +1268,55 @@ export default function TaskPanel() {
     }));
   };
 
+  const normalizeSourceTargetRowValue = (value) => {
+    try {
+      const parsed = JSON.parse(String(value ?? ""));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { source: "", target: "" };
+      }
+      return {
+        source: String(parsed.source ?? ""),
+        target: String(parsed.target ?? ""),
+      };
+    } catch {
+      return { source: "", target: "" };
+    }
+  };
+
+  const updateSourceTargetRow = (index, field, value) => {
+    const currentValues = Array.isArray(typePropertyEditor.jsonTexts?.source_targets)
+      ? typePropertyEditor.jsonTexts.source_targets
+      : [];
+    const nextValues = [...currentValues];
+    const nextRow = normalizeSourceTargetRowValue(nextValues[index]);
+    nextRow[field] = String(value ?? "");
+    nextValues[index] = JSON.stringify({
+      source: nextRow.source,
+      target: nextRow.target,
+    });
+    updateTypePropertyJsonField("source_targets", nextValues);
+  };
+
+  const removeSourceTargetRow = (index) => {
+    const currentValues = Array.isArray(typePropertyEditor.jsonTexts?.source_targets)
+      ? typePropertyEditor.jsonTexts.source_targets
+      : [];
+    updateTypePropertyJsonField(
+      "source_targets",
+      currentValues.filter((_, cursor) => cursor !== index),
+    );
+  };
+
+  const addSourceTargetRow = () => {
+    const currentValues = Array.isArray(typePropertyEditor.jsonTexts?.source_targets)
+      ? typePropertyEditor.jsonTexts.source_targets
+      : [];
+    updateTypePropertyJsonField("source_targets", [
+      ...currentValues,
+      JSON.stringify({ source: "", target: "" }),
+    ]);
+  };
+
   const confirmTypePropertyEditor = () => {
     if (!typePropertyEditor.open || !typePropertyEditor.draft) return;
 
@@ -1061,7 +1330,13 @@ export default function TaskPanel() {
     }
 
     const sourceDefinitions =
-      typePropertyEditor.mode === "entity" ? draftEntityTypes : draftEdgeTypes;
+      typePropertyEditor.mode === "entity"
+        ? typePropertyEditor.sourceList === "original"
+          ? originalEntityTypes
+          : draftEntityTypes
+        : typePropertyEditor.sourceList === "original"
+          ? originalEdgeTypes
+          : draftEdgeTypes;
     const hasDuplicateName = sourceDefinitions.some(
       (item, index) =>
         index !== typePropertyEditor.index &&
@@ -1143,7 +1418,17 @@ export default function TaskPanel() {
     }
 
     if (typePropertyEditor.mode === "entity") {
-      setDraftEntityTypes((current) =>
+      if (typePropertyEditor.sourceList === "original") {
+        setOriginalEntityTypes((current) =>
+          current.map((item, index) => (index === typePropertyEditor.index ? nextDraft : item)),
+        );
+      } else {
+        setDraftEntityTypes((current) =>
+          current.map((item, index) => (index === typePropertyEditor.index ? nextDraft : item)),
+        );
+      }
+    } else if (typePropertyEditor.sourceList === "original") {
+      setOriginalEdgeTypes((current) =>
         current.map((item, index) => (index === typePropertyEditor.index ? nextDraft : item)),
       );
     } else {
@@ -1160,41 +1445,106 @@ export default function TaskPanel() {
     if (!Number.isInteger(targetIndex) || targetIndex < 0) return;
 
     if (typePropertyEditor.mode === "entity") {
-      setDraftEntityTypes((current) => current.filter((_, index) => index !== targetIndex));
+      if (typePropertyEditor.sourceList === "original") {
+        setOriginalEntityTypes((current) => current.filter((_, index) => index !== targetIndex));
+      } else {
+        setDraftEntityTypes((current) => current.filter((_, index) => index !== targetIndex));
+      }
     } else if (typePropertyEditor.mode === "relationship") {
-      setDraftEdgeTypes((current) => current.filter((_, index) => index !== targetIndex));
+      if (typePropertyEditor.sourceList === "original") {
+        setOriginalEdgeTypes((current) => current.filter((_, index) => index !== targetIndex));
+      } else {
+        setDraftEdgeTypes((current) => current.filter((_, index) => index !== targetIndex));
+      }
     }
     closeTypePropertyEditor();
   };
 
-  const openOntologyEditor = (mode) => {
+  const openOntologyEditor = async (section) => {
     if (!canOpenOntologyEditor) {
       addSystemLog("Ontology editor is available after Step A finishes.");
       return;
     }
-    setOntologyEditorMode(mode);
-    setDraftEntityTypes(extractOntologyTypeDrafts(currentProject, "entity_types", "entity"));
-    setDraftEdgeTypes(extractOntologyTypeDrafts(currentProject, "edge_types", "relationship"));
+    const baselineEntityTypes = extractOntologyTypeDrafts(currentProject, "entity_types", "entity");
+    const baselineEdgeTypes = extractOntologyTypeDrafts(currentProject, "edge_types", "relationship");
+    setOntologyEditorOpen(true);
+    setOntologyEditorTab(section);
+    setOntologyEditorRemoveMode({ entity: false, relationship: false });
+    setOntologyMergeSelection({ entity: [], relationship: [] });
+    setOntologyGeneratedDiff({ entity: false, relationship: false });
+    setOntologyMergeRequired(false);
+    setOriginalEntityTypes(baselineEntityTypes);
+    setOriginalEdgeTypes(baselineEdgeTypes);
+    setDraftEntityTypes(baselineEntityTypes);
+    setDraftEdgeTypes(baselineEdgeTypes);
     setOntologyEditorError("");
     closeTypePropertyEditor();
+    try {
+      const rows = await fetchProjectOntologyVersions(form.projectId, 50);
+      setOntologyVersions(rows);
+      const latestGenerated = rows.find((row) => String(row?.source ?? "").toLowerCase() === "generated");
+      if (latestGenerated?.ontology_json) {
+        const generatedEntityTypes = extractOntologyTypeDrafts(
+          { ontology: latestGenerated.ontology_json },
+          "entity_types",
+          "entity",
+        );
+        const generatedEdgeTypes = extractOntologyTypeDrafts(
+          { ontology: latestGenerated.ontology_json },
+          "edge_types",
+          "relationship",
+        );
+        const nextDraftEntityTypes =
+          generatedEntityTypes.length > 0 ? generatedEntityTypes : baselineEntityTypes;
+        const nextDraftEdgeTypes = generatedEdgeTypes.length > 0 ? generatedEdgeTypes : baselineEdgeTypes;
+        const hasEntityGeneratedDiff =
+          generatedEntityTypes.length > 0 &&
+          !areTypeDefinitionListsEquivalent(baselineEntityTypes, generatedEntityTypes, "entity");
+        const hasRelationshipGeneratedDiff =
+          generatedEdgeTypes.length > 0 &&
+          !areTypeDefinitionListsEquivalent(baselineEdgeTypes, generatedEdgeTypes, "relationship");
+        setDraftEntityTypes(nextDraftEntityTypes);
+        setDraftEdgeTypes(nextDraftEdgeTypes);
+        setOntologyGeneratedDiff({
+          entity: hasEntityGeneratedDiff,
+          relationship: hasRelationshipGeneratedDiff,
+        });
+        setOntologyMergeRequired(hasEntityGeneratedDiff || hasRelationshipGeneratedDiff);
+      }
+    } catch (error) {
+      addSystemLog(`Failed to load ontology versions: ${String(error)}`);
+      setOntologyVersions([]);
+    }
   };
 
   const closeOntologyEditor = () => {
     if (savingOntologyTypes) return;
-    setOntologyEditorMode("");
+    setOntologyEditorOpen(false);
+    setOntologyEditorTab("entity");
+    setOntologyEditorRemoveMode({ entity: false, relationship: false });
+    setOntologyMergeSelection({ entity: [], relationship: [] });
+    setOntologyVersions([]);
     setOntologyEditorError("");
     closeTypePropertyEditor();
   };
 
   const revertOntologyEditorDraft = () => {
-    if (!Boolean(ontologyEditorMode) || savingOntologyTypes) return;
+    if (!ontologyEditorOpen || savingOntologyTypes) return;
     setDraftEntityTypes(extractOntologyTypeDrafts(currentProject, "entity_types", "entity"));
     setDraftEdgeTypes(extractOntologyTypeDrafts(currentProject, "edge_types", "relationship"));
+    setOntologyGeneratedDiff({ entity: false, relationship: false });
+    setOntologyMergeRequired(false);
+    setOntologyEditorRemoveMode({ entity: false, relationship: false });
+    setOntologyMergeSelection({ entity: [], relationship: [] });
     setOntologyEditorError("");
     closeTypePropertyEditor();
   };
 
   const confirmOntologyEditor = async () => {
+    if (ontologyMergeRequired) {
+      setOntologyEditorError("Click Merge Matching before Confirm.");
+      return;
+    }
     const normalizedProjectId = String(form.projectId ?? "").trim();
     if (!normalizedProjectId) {
       setOntologyEditorError("Project ID is required to save ontology edits.");
@@ -1209,8 +1559,15 @@ export default function TaskPanel() {
         edgeTypeNames: draftEdgeTypeNames,
         entityTypes: draftEntityTypes,
         edgeTypes: draftEdgeTypes,
+        preserveGraphStatus: true,
       });
-      setOntologyEditorMode("");
+      setOntologyEditorOpen(false);
+      setOntologyEditorTab("entity");
+      setOntologyEditorRemoveMode({ entity: false, relationship: false });
+      setOntologyMergeSelection({ entity: [], relationship: [] });
+      setOntologyGeneratedDiff({ entity: false, relationship: false });
+      setOntologyMergeRequired(false);
+      setOntologyVersions([]);
       closeTypePropertyEditor();
     } catch (error) {
       const message = String(error);
@@ -1223,10 +1580,82 @@ export default function TaskPanel() {
 
   const handleEntityTagNamesChange = (nextNames) => {
     setDraftEntityTypes((current) => remapTypeDefinitions(current, nextNames, "entity"));
+    setOntologyMergeSelection((current) => ({ ...current, entity: [] }));
   };
 
   const handleRelationshipTagNamesChange = (nextNames) => {
     setDraftEdgeTypes((current) => remapTypeDefinitions(current, nextNames, "relationship"));
+    setOntologyMergeSelection((current) => ({ ...current, relationship: [] }));
+  };
+
+  const handleOriginalEntityTagNamesChange = (nextNames) => {
+    setOriginalEntityTypes((current) => remapTypeDefinitions(current, nextNames, "entity"));
+  };
+
+  const handleOriginalRelationshipTagNamesChange = (nextNames) => {
+    setOriginalEdgeTypes((current) => remapTypeDefinitions(current, nextNames, "relationship"));
+  };
+
+  const toggleOntologyTypeSelection = (mode, index) => {
+    setOntologyMergeSelection((current) => {
+      const currentValues = Array.isArray(current?.[mode]) ? current[mode] : [];
+      const alreadySelected = currentValues.includes(index);
+      return {
+        ...current,
+        [mode]: alreadySelected
+          ? currentValues.filter((value) => value !== index)
+          : [...currentValues, index],
+      };
+    });
+  };
+
+  const mergeSelectedDraftTypes = (mode) => {
+    const selectedIndexes = Array.isArray(ontologyMergeSelection?.[mode])
+      ? ontologyMergeSelection[mode]
+      : [];
+    if (selectedIndexes.length < 2) return;
+    const targetIndex = selectedIndexes[0];
+    const selectedIndexSet = new Set(selectedIndexes);
+    const applyMerge = (types) => {
+      const currentTypes = Array.isArray(types) ? types : [];
+      const target = currentTypes[targetIndex];
+      if (!target) return currentTypes;
+      let mergedTarget = target;
+      selectedIndexes.slice(1).forEach((index) => {
+        const incoming = currentTypes[index];
+        if (!incoming) return;
+        mergedTarget = mergeTypeDefinition(mergedTarget, incoming, mode === "entity" ? "entity" : "relationship");
+      });
+      return currentTypes
+        .map((item, index) => (index === targetIndex ? mergedTarget : item))
+        .filter((_, index) => !selectedIndexSet.has(index) || index === targetIndex);
+    };
+    if (mode === "entity") {
+      setDraftEntityTypes((current) => applyMerge(current));
+    } else {
+      setDraftEdgeTypes((current) => applyMerge(current));
+    }
+    setOntologyMergeSelection((current) => ({ ...current, [mode]: [] }));
+  };
+
+  const mergeMatchingTypesFromOriginal = () => {
+    setDraftEntityTypes((current) =>
+      current.map((item) => {
+        const baseline = findTypeDefinitionByName(originalEntityTypes, item?.name);
+        if (!baseline) return item;
+        return mergeTypeDefinition(baseline, item, "entity");
+      }),
+    );
+    setDraftEdgeTypes((current) =>
+      current.map((item) => {
+        const baseline = findTypeDefinitionByName(originalEdgeTypes, item?.name);
+        if (!baseline) return item;
+        return mergeTypeDefinition(baseline, item, "relationship");
+      }),
+    );
+    setOntologyMergeSelection({ entity: [], relationship: [] });
+    setOntologyMergeRequired(false);
+    setOntologyEditorError("");
   };
 
   const handleOntologyStatBoxKeyDown = (event, section) => {
@@ -1236,7 +1665,7 @@ export default function TaskPanel() {
   };
 
   const handleGraphTabClick = () => {
-    if (!stepBUnlocked) {
+    if (!stepBUnlocked || ontologyMergeRequired) {
       // addSystemLog("Step B is locked until Step A finishes ontology generation.");
       return;
     }
@@ -1276,7 +1705,7 @@ export default function TaskPanel() {
       error: "",
     }));
 
-    getPromptLabelTypeLists(labelName)
+    getPromptLabelTypeLists(labelName, { projectId: normalizedCurrentProjectId })
       .then((result) => {
         if (cancelled) return;
         setPromptLabelEditor((current) => {
@@ -1305,7 +1734,12 @@ export default function TaskPanel() {
     return () => {
       cancelled = true;
     };
-  }, [promptLabelEditor.open, promptLabelEditor.isNewLabel, promptLabelEditor.labelName]);
+  }, [
+    promptLabelEditor.open,
+    promptLabelEditor.isNewLabel,
+    promptLabelEditor.labelName,
+    normalizedCurrentProjectId,
+  ]);
 
   useEffect(() => {
     if (!promptLabelEditor.open) return undefined;
@@ -1330,7 +1764,9 @@ export default function TaskPanel() {
       error: "",
     }));
 
-    getPromptLabelPromptTemplate(requestLabelName, activeTab)
+    getPromptLabelPromptTemplate(requestLabelName, activeTab, {
+      projectId: promptLabelEditor.isNewLabel ? "" : normalizedCurrentProjectId,
+    })
       .then((result) => {
         if (cancelled) return;
         setPromptLabelEditor((current) => {
@@ -1378,10 +1814,11 @@ export default function TaskPanel() {
     promptLabelEditor.nodeEdgesEditorTab,
     promptLabelEditor.isNewLabel ? "__new_label__" : promptLabelEditor.labelName,
     promptLabelEditor.isNewLabel,
+    normalizedCurrentProjectId,
   ]);
 
   useEffect(() => {
-    if (!isTypePropertyEditorOpen && !promptLabelEditor.open && !Boolean(ontologyEditorMode)) {
+    if (!isTypePropertyEditorOpen && !promptLabelEditor.open && !ontologyEditorOpen) {
       return undefined;
     }
 
@@ -1397,7 +1834,7 @@ export default function TaskPanel() {
         closePromptLabelEditor();
         return;
       }
-      if (ontologyEditorMode) {
+      if (ontologyEditorOpen) {
         closeOntologyEditor();
       }
     };
@@ -1412,7 +1849,7 @@ export default function TaskPanel() {
     promptLabelEditor.syncing,
     promptLabelEditor.savingTypes,
     promptLabelEditor.generatingFromLlm,
-    ontologyEditorMode,
+    ontologyEditorOpen,
     savingOntologyTypes,
   ]);
 
@@ -1422,21 +1859,40 @@ export default function TaskPanel() {
   }, [systemLogs.length, activeBackendTab]);
 
   useEffect(() => {
-    if (activeStepTab === "B" && !stepBUnlocked) {
+    if (activeStepTab === "B" && (!stepBUnlocked || ontologyMergeRequired)) {
       setActiveStepTab("A");
     }
-  }, [activeStepTab, stepBUnlocked]);
+  }, [activeStepTab, stepBUnlocked, ontologyMergeRequired]);
+
+  useEffect(() => {
+    setOntologyGeneratedDiff({ entity: false, relationship: false });
+    setOntologyMergeRequired(false);
+  }, [normalizedCurrentProjectId]);
+
+  useEffect(() => {
+    if (isGraphTaskRunning) {
+      if (activeStepTab !== "B") {
+        setActiveStepTab("B");
+      }
+      return;
+    }
+    if (isOntologyTaskRunning && activeStepTab !== "A") {
+      setActiveStepTab("A");
+    }
+  }, [activeStepTab, isGraphTaskRunning, isOntologyTaskRunning]);
 
   const typePropertyDraft = typePropertyEditor.draft ?? {};
+  const typePropertyTargetLabel =
+    typePropertyEditor.sourceList === "original" ? "Original" : "New / Generated";
   const typePropertyModeLabel =
     typePropertyEditor.mode === "entity" ? "Entity Type Properties" : "Relationship Type Properties";
   const typePropertyDescription =
     typePropertyEditor.mode === "entity"
-      ? "Edit name, description, metadata string list, and attribute JSON payloads."
-      : "Edit name, description, attribute JSON payloads, and source-target JSON payloads.";
+      ? `${typePropertyTargetLabel} list: edit name, description, metadata string list, and attribute JSON payloads.`
+      : `${typePropertyTargetLabel} list: edit name, description, attribute JSON payloads, and source-target pairs.`;
   const editingPromptLabelMeta = promptLabelCatalog.items.find(
     (item) =>
-      String(item?.name ?? "").trim().toLowerCase() ===
+      String(item?.display_name ?? item?.name ?? "").trim().toLowerCase() ===
       String(promptLabelEditor.labelName ?? "").trim().toLowerCase(),
   );
 
@@ -1485,7 +1941,7 @@ export default function TaskPanel() {
                 Step A - Ontology
               </button>
               <button
-                className={`step-tab ${activeStepTab === "B" ? "active" : ""} ${!stepBUnlocked ? "disabled" : ""}`}
+                className={`step-tab ${activeStepTab === "B" ? "active" : ""} ${!stepBUnlocked || ontologyMergeRequired ? "disabled" : ""}`}
                 type="button"
                 onClick={handleGraphTabClick}
               >
@@ -1616,6 +2072,53 @@ export default function TaskPanel() {
                       onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
                     />
                   </label>
+                  <label className="field checkbox-field">
+                    <span className="field-toggle-row">
+                      <span>Limit PDF page range</span>
+                      <span className="toggle-switch toggle-switch-green">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(form.usePdfPageRange)}
+                          onChange={(event) => setFormField("usePdfPageRange", event.target.checked)}
+                        />
+                        <span className="slider" />
+                      </span>
+                    </span>
+                    <p className="field-note">
+                      Off = parse full PDF. On = only parse selected page range below.
+                    </p>
+                  </label>
+                  {Boolean(form.usePdfPageRange) && (
+                    <>
+                      <div className="field-row-two pdf-page-range-row">
+                        <label className="field">
+                          <span>PDF Page From</span>
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={form.pdfPageFrom}
+                            onChange={(event) => setFormField("pdfPageFrom", event.target.value)}
+                            placeholder="1"
+                          />
+                        </label>
+                        <label className="field">
+                          <span>PDF Page To</span>
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={form.pdfPageTo}
+                            onChange={(event) => setFormField("pdfPageTo", event.target.value)}
+                            placeholder="100"
+                          />
+                        </label>
+                      </div>
+                      <p className="field-note pdf-page-range-note">
+                        Example: 1 to 100 reads the first 100 pages.
+                      </p>
+                    </>
+                  )}
 
                   <label className="field">
                     <div className="field-head">
@@ -1660,10 +2163,11 @@ export default function TaskPanel() {
                             .filter((item) => String(item?.name ?? "").trim())
                             .map((item) => {
                               const labelName = String(item?.name ?? "").trim();
+                              const labelDisplayName = String(item?.display_name ?? labelName).trim();
                               const itemProjectId = String(item?.project_id ?? "").trim();
                               const isSelected =
                                 String(form.promptLabel ?? "").trim().toLowerCase() ===
-                                labelName.toLowerCase();
+                                labelDisplayName.toLowerCase();
                               const isProjectScoped =
                                 Boolean(itemProjectId) &&
                                 Boolean(normalizedCurrentProjectId) &&
@@ -1671,7 +2175,7 @@ export default function TaskPanel() {
                               return (
                                 <div
                                   className={`label-dropdown-item ${isSelected ? "selected" : ""}`}
-                                  key={`${labelName}-${itemProjectId || "global"}`}
+                                  key={`${labelDisplayName}-${itemProjectId || "global"}-${labelName}`}
                                   role="option"
                                   aria-selected={isSelected}
                                 >
@@ -1679,12 +2183,12 @@ export default function TaskPanel() {
                                     className="label-dropdown-item-main"
                                     type="button"
                                     onClick={() => {
-                                      setProjectPromptLabel(labelName);
+                                      setProjectPromptLabel(labelDisplayName);
                                       setPromptLabelDropdownOpen(false);
                                     }}
-                                    title={labelName}
+                                    title={labelDisplayName}
                                   >
-                                    <span className="label-dropdown-item-name">{labelName}</span>
+                                    <span className="label-dropdown-item-name">{labelDisplayName}</span>
                                   </button>
                                   <div className="label-dropdown-item-indicators">
                                     {isSelected && (
@@ -1709,9 +2213,9 @@ export default function TaskPanel() {
                                   <button
                                     className="label-dropdown-item-edit"
                                     type="button"
-                                    onClick={() => openPromptLabelEditor(labelName)}
-                                    aria-label={`Edit label ${labelName}`}
-                                    title={`Edit label ${labelName}`}
+                                    onClick={() => openPromptLabelEditor(labelDisplayName)}
+                                    aria-label={`Edit label ${labelDisplayName}`}
+                                    title={`Edit label ${labelDisplayName}`}
                                   >
                                     ✎
                                   </button>
@@ -1733,9 +2237,20 @@ export default function TaskPanel() {
                     </div>
                   </label>
 
-                  <button className="action-btn" type="submit" disabled={ontologyTask.status === "running"}>
-                    {ontologyTask.status === "running" ? "Generating..." : "Run Ontology Generate"}
-                  </button>
+                  <div className="step-primary-actions">
+                    <button className="action-btn" type="submit" disabled={isAnyTaskRunning}>
+                      {isOntologyTaskRunning
+                        ? "Generating..."
+                        : isGraphTaskRunning
+                          ? "Step B Running..."
+                          : "Run Ontology Generate"}
+                    </button>
+                    {isOntologyTaskRunning && hasOntologyTaskId && (
+                      <button className="ontology-editor-cancel-btn" type="button" onClick={cancelOntologyTask}>
+                        Cancel
+                      </button>
+                    )}
+                  </div>
                 </form>
 
                 <div className="progress-wrap">
@@ -1778,7 +2293,7 @@ export default function TaskPanel() {
             )}
 
             {activeStepTab === "B" && (
-              <article className={`step-card ${!stepBUnlocked ? "locked" : ""}`}>
+              <article className={`step-card ${!stepBUnlocked || ontologyMergeRequired ? "locked" : ""}`}>
                 <div className="card-head">
                   <h2 className="step-title">Graph Build</h2>
                   <div className="card-head-meta">
@@ -1810,6 +2325,11 @@ export default function TaskPanel() {
                 {!stepBUnlocked && (
                   <p className="status-line warning">Step B is locked until Step A finishes successfully.</p>
                 )}
+                {stepBUnlocked && ontologyMergeRequired && (
+                  <p className="status-line warning">
+                    Step B is locked. Open ontology editor, click Merge Matching, then Confirm.
+                  </p>
+                )}
 
                 <label className="field">
                   <span>Graph Name</span>
@@ -1824,6 +2344,18 @@ export default function TaskPanel() {
                 </label>
 
                 <label className="field">
+                  <span>Graph Label</span>
+                  <input
+                    value={form.graphLabel}
+                    onChange={(event) => setFormField("graphLabel", event.target.value)}
+                    placeholder="Optional graph label suffix"
+                  />
+                  <p className="field-note">
+                    Optional suffix for graph labels (node/edge/episode) when `graph_label` exists.
+                  </p>
+                </label>
+
+                <label className="field">
                   <span>Chunk Mode</span>
                   <select
                     value={form.chunkMode}
@@ -1832,46 +2364,265 @@ export default function TaskPanel() {
                     <option value="fixed">Fixed</option>
                     <option value="semantic">Semantic (LLM)</option>
                     <option value="hybrid">Hybrid (Fixed + LLM)</option>
+                    <option value="llama_index">LlamaIndex Semantic</option>
                   </select>
                   <p className="field-note">
                     Fixed is fastest. Semantic uses LLM boundaries. Hybrid uses fixed first then LLM only
-                    when needed.
+                    when needed. LlamaIndex Semantic uses SemanticSplitterNodeParser.
                   </p>
                 </label>
 
                 <label className="field">
-                  <span>Chunk Size</span>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={form.chunkSize}
-                    onChange={(event) => setFormField("chunkSize", event.target.value)}
-                    placeholder="500"
-                  />
+                  <span>Graphiti Embedding Model</span>
+                  <select
+                    value={resolvedGraphitiEmbeddingModel}
+                    onChange={(event) => setFormField("graphitiEmbeddingModel", event.target.value)}
+                    disabled={!isGraphitiBackend}
+                  >
+                    {graphitiEmbeddingModelOptions.map((modelName) => (
+                      <option key={modelName} value={modelName}>
+                        {modelName}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="field-note">
+                    {isGraphitiBackend
+                      ? "Used by Graphiti (neo4j/oracle) during Step B embedding."
+                      : "Enabled when graph backend is neo4j/oracle. Zep Cloud ignores this setting."}
+                  </p>
                 </label>
 
-                <label className="field">
-                  <span>Chunk Overlap</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={form.chunkOverlap}
-                    onChange={(event) => setFormField("chunkOverlap", event.target.value)}
-                    placeholder="50"
-                  />
-                  <p className="field-note">Defaults: chunk size 500, overlap 50.</p>
-                </label>
+                {!isLlmOnlyChunkMode && (
+                  <label className="field">
+                    <span>Chunk Size</span>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={form.chunkSize}
+                      onChange={(event) => setFormField("chunkSize", event.target.value)}
+                      placeholder="500"
+                    />
+                  </label>
+                )}
 
-                <button
-                  className="action-btn"
-                  type="button"
-                  onClick={runGraphBuild}
-                  disabled={graphTask.status === "running" || !stepBUnlocked}
-                >
-                  {graphTask.status === "running" ? "Building..." : "Run Graph Build"}
-                </button>
+                {!isLlmOnlyChunkMode && (
+                  <label className="field">
+                    <span>Chunk Overlap</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={form.chunkOverlap}
+                      onChange={(event) => setFormField("chunkOverlap", event.target.value)}
+                      placeholder="50"
+                    />
+                    <p className="field-note">Defaults: chunk size 500, overlap 50.</p>
+                  </label>
+                )}
+
+                <div className="field stepb-toggle-row">
+                  <label className="stepb-toggle-item">
+                    <span className="stepb-toggle-label">Override Existing Graph</span>
+                    <span className="stepb-toggle-control">
+                      <span className="toggle-switch toggle-switch-green">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(form.overrideGraph)}
+                          onChange={(event) => setFormField("overrideGraph", event.target.checked)}
+                        />
+                        <span className="slider" />
+                      </span>
+                    </span>
+                  </label>
+
+                  <label className="stepb-toggle-item">
+                    <span className="stepb-toggle-label">Refresh Data</span>
+                    <span className="stepb-toggle-control">
+                      <span className="toggle-switch toggle-switch-green">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(form.refreshDataWhileBuild)}
+                          onChange={async (event) => {
+                            const enabled = event.target.checked;
+                            setFormField("refreshDataWhileBuild", enabled);
+                            const projectId = String(form.projectId ?? "").trim();
+                            if (!projectId) return;
+                            try {
+                              await updateProjectRefreshDataWhileBuild(projectId, enabled);
+                            } catch (error) {
+                              addSystemLog(`Failed to save Refresh Data setting: ${String(error)}`);
+                            }
+                          }}
+                        />
+                        <span className="slider" />
+                      </span>
+                    </span>
+                  </label>
+
+                  <label className="stepb-toggle-item stepb-poll-seconds-item">
+                    <span className="stepb-toggle-label">Auto Refresh (sec)</span>
+                    <span className="stepb-toggle-control">
+                      <input
+                        className="stepb-poll-seconds-input"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={form.refreshDataPollSeconds}
+                        placeholder="20"
+                        onChange={(event) => {
+                          const raw = String(event.target.value ?? "").trim();
+                          if (!raw) {
+                            setFormField("refreshDataPollSeconds", "");
+                            return;
+                          }
+                          const parsed = Number(raw);
+                          if (!Number.isFinite(parsed)) return;
+                          setFormField("refreshDataPollSeconds", Math.max(1, Math.floor(parsed)));
+                        }}
+                      />
+                    </span>
+                  </label>
+                </div>
+
+                {canShowRuntimeControls && (
+                  <section className="runtime-controls">
+                    <div className="runtime-controls-head">
+                      <span className="runtime-controls-title">Runtime Controls</span>
+                      <label className="runtime-controls-head-toggle">
+                        <span className="runtime-controls-switch-label">Show</span>
+                        <span className="toggle-switch toggle-switch-green">
+                          <input
+                            type="checkbox"
+                            checked={showRuntimeControls}
+                            onChange={(event) => setShowRuntimeControls(event.target.checked)}
+                          />
+                          <span className="slider" />
+                        </span>
+                      </label>
+                    </div>
+                    {showRuntimeControls && (
+                      <div className="runtime-controls-body runtime-controls-columns">
+                        <div className="runtime-controls-column">
+                          <label className="stepb-toggle-item">
+                            <span className="stepb-toggle-label">OTel Tracing</span>
+                            <span className="stepb-toggle-control">
+                              <span className="toggle-switch toggle-switch-green">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(form.enableOtelTracing)}
+                                  onChange={(event) => setFormField("enableOtelTracing", event.target.checked)}
+                                />
+                                <span className="slider" />
+                              </span>
+                            </span>
+                          </label>
+                        </div>
+
+                        {isOracleBackend && (
+                          <div className="runtime-controls-column runtime-controls-oracle">
+                            <label className="stepb-toggle-item">
+                              <span className="stepb-toggle-label">Oracle Runtime Overrides</span>
+                              <span className="stepb-toggle-control">
+                                <span className="toggle-switch toggle-switch-green">
+                                  <input
+                                    type="checkbox"
+                                    checked={enableOracleRuntimeOverrides}
+                                    onChange={(event) =>
+                                      setFormField("enableOracleRuntimeOverrides", event.target.checked)
+                                    }
+                                  />
+                                  <span className="slider" />
+                                </span>
+                              </span>
+                            </label>
+                            {enableOracleRuntimeOverrides ? (
+                              <div className="field-row-two runtime-controls-grid">
+                                <label className="field">
+                                  <span>Oracle Pool Min</span>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    value={form.oraclePoolMin}
+                                    onChange={(event) =>
+                                      updateOracleRuntimeField("oraclePoolMin", event.target.value)
+                                    }
+                                    placeholder="2"
+                                  />
+                                </label>
+                                <label className="field">
+                                  <span>Oracle Pool Max</span>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    value={form.oraclePoolMax}
+                                    onChange={(event) =>
+                                      updateOracleRuntimeField("oraclePoolMax", event.target.value)
+                                    }
+                                    placeholder="32"
+                                  />
+                                </label>
+                                <label className="field">
+                                  <span>Oracle Pool Increment</span>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    value={form.oraclePoolIncrement}
+                                    onChange={(event) =>
+                                      updateOracleRuntimeField("oraclePoolIncrement", event.target.value)
+                                    }
+                                    placeholder="2"
+                                  />
+                                </label>
+                                <label className="field">
+                                  <span>Oracle Max Coroutines</span>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    value={form.oracleMaxCoroutines}
+                                    onChange={(event) =>
+                                      updateOracleRuntimeField("oracleMaxCoroutines", event.target.value)
+                                    }
+                                    placeholder="20"
+                                  />
+                                </label>
+                              </div>
+                            ) : (
+                              <p className="field-note">
+                                Oracle runtime overrides are disabled. Step B uses backend global settings.
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                )}
+
+                <div className="step-primary-actions stepb-primary-actions">
+                  <button
+                    className="action-btn"
+                    type="button"
+                    onClick={runGraphBuild}
+                    disabled={!canRunGraphBuild}
+                  >
+                    {graphTask.status === "running" ? "Building..." : "Run Graph Build"}
+                  </button>
+                  {canShowResumeGraphBuild && (
+                    <button className="action-btn" type="button" onClick={runGraphBuild}>
+                      {`Resume[${resumeNextBatch}/${resumeTotalBatches}]`}
+                    </button>
+                  )}
+                  {isGraphTaskRunning && (
+                    <button className="ontology-editor-cancel-btn" type="button" onClick={cancelGraphBuild}>
+                      Cancel
+                    </button>
+                  )}
+                </div>
 
                 <div className="progress-wrap">
                   <div className="progress-track">
@@ -1880,7 +2631,7 @@ export default function TaskPanel() {
                   <span>{graphTask.progress}%</span>
                 </div>
 
-                <p className="status-line">{graphTask.message}</p>
+                <p className="status-line">{graphStatusLineText}</p>
                 <div className="stat-grid">
                   <div className="stat-box">
                     <span className="stat-value">{graphTask.nodeCount}</span>
@@ -1955,19 +2706,29 @@ export default function TaskPanel() {
         onRevertToDefault={revertPromptLabelEditorToDefault}
         onSyncFromDefault={syncPromptLabelContent}
         onGenerateFromLlm={generatePromptLabelContentFromLlm}
+        onKeepRemainingOnGenerateChange={(enabled) =>
+          setPromptLabelEditor((current) => ({
+            ...current,
+            keepRemainingOnGenerate: Boolean(enabled),
+          }))
+        }
         onSave={savePromptLabelTypeLists}
       />
 
-      {Boolean(ontologyEditorMode) && (
+      {ontologyEditorOpen && (
         <div className="ontology-editor-overlay">
           <article
             className="ontology-editor-panel"
             role="dialog"
             aria-modal="true"
-            aria-label={isEntityEditor ? "Entity type editor" : "Relationship type editor"}
+            aria-label={
+              isEntityTab
+                ? "Edit ontology types, entity types tab"
+                : "Edit ontology types, relationship types tab"
+            }
           >
             <div className="ontology-editor-head">
-              <h3>{isEntityEditor ? "Edit Entity Types" : "Edit Relationship Types"}</h3>
+              <h3>Edit ontology types</h3>
               <button
                 className="ontology-editor-close"
                 type="button"
@@ -1978,34 +2739,153 @@ export default function TaskPanel() {
                 ×
               </button>
             </div>
+            <div className="ontology-editor-tabs" role="tablist" aria-label="Ontology type lists">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={isEntityTab}
+                className={`ontology-editor-tab ${isEntityTab ? "active" : ""}`}
+                onClick={() => {
+                  setOntologyEditorTab("entity");
+                  setOntologyEditorRemoveMode({ entity: false, relationship: false });
+                }}
+              >
+                Entity Types
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={!isEntityTab}
+                className={`ontology-editor-tab ${!isEntityTab ? "active" : ""}`}
+                onClick={() => {
+                  setOntologyEditorTab("relationship");
+                  setOntologyEditorRemoveMode({ entity: false, relationship: false });
+                }}
+              >
+                Relationship Types
+              </button>
+            </div>
             <p className="ontology-editor-note">
-              {isEntityEditor
-                ? "Update entity type names. Use tag click to open the full property editor."
-                : "Update relationship type names. Use tag click to open the full property editor."}
+              {isEntityTab
+                ? ontologyGeneratedDiff.entity
+                  ? "Top row is Original and editable. Bottom row is editable New/Generated. Highlighted chips changed from original."
+                  : "Single editable row because no generated diff is pending."
+                : ontologyGeneratedDiff.relationship
+                  ? "Top row is Original and editable. Bottom row is editable New/Generated. Highlighted chips changed from original."
+                  : "Single editable row because no generated diff is pending."}
             </p>
             <div className="ontology-editor-section-list">
-              {isEntityEditor ? (
-                <TypeTagEditor
-                  title="Entity Types"
-                  tags={draftEntityTypeNames}
-                  onChange={handleEntityTagNamesChange}
-                  onOpenProperties={(index) => openTypePropertyEditor("entity", index)}
-                  placeholder="Add entity type and press Enter"
-                  autoFocus
-                  highlighted
-                />
+              {isEntityTab ? (
+                ontologyGeneratedDiff.entity ? (
+                  <>
+                    <TypeTagEditor
+                      title="Original Entity Types"
+                      tags={originalEntityTypeNames}
+                      onChange={handleOriginalEntityTagNamesChange}
+                      onOpenProperties={(index) => openTypePropertyEditor("entity", index, "original")}
+                      placeholder="Add entity type and press Enter"
+                      highlighted
+                      changedTagNames={changedEntityTypeNames}
+                    />
+                    <TypeTagEditor
+                      title="New / Generated Entity Types"
+                      tags={draftEntityTypeNames}
+                      onChange={handleEntityTagNamesChange}
+                      onOpenProperties={(index) => openTypePropertyEditor("entity", index, "draft")}
+                      placeholder="Add entity type and press Enter"
+                      autoFocus
+                      highlighted
+                      removeMode={ontologyEditorRemoveMode.entity}
+                      onToggleRemoveMode={() =>
+                        setOntologyEditorRemoveMode((m) => ({ ...m, entity: !m.entity }))
+                      }
+                      selectedIndexes={ontologyMergeSelection.entity}
+                      onToggleSelect={(index) => toggleOntologyTypeSelection("entity", index)}
+                      onMergeSelected={() => mergeSelectedDraftTypes("entity")}
+                      changedTagNames={changedEntityTypeNames}
+                    />
+                  </>
+                ) : (
+                  <TypeTagEditor
+                    title="Entity Types"
+                    tags={draftEntityTypeNames}
+                    onChange={handleEntityTagNamesChange}
+                    onOpenProperties={(index) => openTypePropertyEditor("entity", index, "draft")}
+                    placeholder="Add entity type and press Enter"
+                    autoFocus
+                    highlighted
+                    removeMode={ontologyEditorRemoveMode.entity}
+                    onToggleRemoveMode={() =>
+                      setOntologyEditorRemoveMode((m) => ({ ...m, entity: !m.entity }))
+                    }
+                    selectedIndexes={ontologyMergeSelection.entity}
+                    onToggleSelect={(index) => toggleOntologyTypeSelection("entity", index)}
+                    onMergeSelected={() => mergeSelectedDraftTypes("entity")}
+                  />
+                )
               ) : (
-                <TypeTagEditor
-                  title="Relationship Types"
-                  tags={draftEdgeTypeNames}
-                  onChange={handleRelationshipTagNamesChange}
-                  onOpenProperties={(index) => openTypePropertyEditor("relationship", index)}
-                  placeholder="Add relationship type and press Enter"
-                  autoFocus
-                  highlighted
-                />
+                ontologyGeneratedDiff.relationship ? (
+                  <>
+                    <TypeTagEditor
+                      title="Original Relationship Types"
+                      tags={originalEdgeTypeNames}
+                      onChange={handleOriginalRelationshipTagNamesChange}
+                      onOpenProperties={(index) =>
+                        openTypePropertyEditor("relationship", index, "original")
+                      }
+                      placeholder="Add relationship type and press Enter"
+                      highlighted
+                      changedTagNames={changedEdgeTypeNames}
+                    />
+                    <TypeTagEditor
+                      title="New / Generated Relationship Types"
+                      tags={draftEdgeTypeNames}
+                      onChange={handleRelationshipTagNamesChange}
+                      onOpenProperties={(index) => openTypePropertyEditor("relationship", index, "draft")}
+                      placeholder="Add relationship type and press Enter"
+                      autoFocus
+                      highlighted
+                      removeMode={ontologyEditorRemoveMode.relationship}
+                      onToggleRemoveMode={() =>
+                        setOntologyEditorRemoveMode((m) => ({ ...m, relationship: !m.relationship }))
+                      }
+                      selectedIndexes={ontologyMergeSelection.relationship}
+                      onToggleSelect={(index) => toggleOntologyTypeSelection("relationship", index)}
+                      onMergeSelected={() => mergeSelectedDraftTypes("relationship")}
+                      changedTagNames={changedEdgeTypeNames}
+                    />
+                  </>
+                ) : (
+                  <TypeTagEditor
+                    title="Relationship Types"
+                    tags={draftEdgeTypeNames}
+                    onChange={handleRelationshipTagNamesChange}
+                    onOpenProperties={(index) => openTypePropertyEditor("relationship", index, "draft")}
+                    placeholder="Add relationship type and press Enter"
+                    autoFocus
+                    highlighted
+                    removeMode={ontologyEditorRemoveMode.relationship}
+                    onToggleRemoveMode={() =>
+                      setOntologyEditorRemoveMode((m) => ({ ...m, relationship: !m.relationship }))
+                    }
+                    selectedIndexes={ontologyMergeSelection.relationship}
+                    onToggleSelect={(index) => toggleOntologyTypeSelection("relationship", index)}
+                    onMergeSelected={() => mergeSelectedDraftTypes("relationship")}
+                  />
+                )
               )}
             </div>
+            {ontologyMergeRequired && hasOntologyGeneratedDiff && (
+              <p className="ontology-editor-note ontology-editor-merge-warning">
+                Generated ontology differs from current ontology. Click Merge Matching before Confirm.
+              </p>
+            )}
+            {ontologyVersions.length > 0 && (
+              <p className="ontology-editor-note">
+                Loaded {ontologyVersions.length} ontology version{ontologyVersions.length > 1 ? "s" : ""} for
+                comparison.
+              </p>
+            )}
             {ontologyEditorError && <p className="ontology-editor-error">{ontologyEditorError}</p>}
             <div className="ontology-editor-actions">
               <button
@@ -2019,6 +2899,14 @@ export default function TaskPanel() {
               <button
                 className="ontology-editor-cancel-btn"
                 type="button"
+                onClick={mergeMatchingTypesFromOriginal}
+                disabled={savingOntologyTypes}
+              >
+                Merge Matching
+              </button>
+              <button
+                className="ontology-editor-cancel-btn"
+                type="button"
                 onClick={closeOntologyEditor}
                 disabled={savingOntologyTypes}
               >
@@ -2028,7 +2916,7 @@ export default function TaskPanel() {
                 className="action-btn"
                 type="button"
                 onClick={confirmOntologyEditor}
-                disabled={savingOntologyTypes || isTypePropertyEditorOpen}
+                disabled={!canConfirmOntologyEditor}
               >
                 {savingOntologyTypes ? "Saving..." : "Confirm"}
               </button>
@@ -2115,18 +3003,57 @@ export default function TaskPanel() {
 
               {typePropertyEditor.mode === "relationship" && (
                 <div className="ontology-property-row align-top">
-                  <span className="ontology-property-row-label">Source Targets (JSON List):</span>
+                  <span className="ontology-property-row-label">Source Targets:</span>
                   <div className="ontology-property-row-editor">
-                    <JsonListEditor
-                      values={
-                        Array.isArray(typePropertyEditor.jsonTexts?.source_targets)
-                          ? typePropertyEditor.jsonTexts.source_targets
-                          : []
-                      }
-                      onChange={(nextValues) => updateTypePropertyJsonField("source_targets", nextValues)}
-                      invalidIndexes={typePropertyEditor.invalidJsonIndexes?.source_targets ?? []}
-                      addLabel="Add source-target JSON"
-                    />
+                    <div className="ontology-source-target-list">
+                      {(Array.isArray(typePropertyEditor.jsonTexts?.source_targets)
+                        ? typePropertyEditor.jsonTexts.source_targets
+                        : []
+                      ).map((rowValue, index) => {
+                        const row = normalizeSourceTargetRowValue(rowValue);
+                        const invalidSet = new Set(
+                          Array.isArray(typePropertyEditor.invalidJsonIndexes?.source_targets)
+                            ? typePropertyEditor.invalidJsonIndexes.source_targets
+                            : [],
+                        );
+                        const invalid = invalidSet.has(index);
+                        return (
+                          <div
+                            className={`ontology-source-target-row ${invalid ? "invalid" : ""}`}
+                            key={`source-target-${index}`}
+                          >
+                            <span className="ontology-source-target-inline-label">Source</span>
+                            <input
+                              value={row.source}
+                              onChange={(event) =>
+                                updateSourceTargetRow(index, "source", event.target.value)
+                              }
+                              placeholder="Source type"
+                            />
+                            <span className="ontology-source-target-inline-label">Target</span>
+                            <input
+                              value={row.target}
+                              onChange={(event) =>
+                                updateSourceTargetRow(index, "target", event.target.value)
+                              }
+                              placeholder="Target type"
+                            />
+                            <button
+                              className="ontology-source-target-remove-btn"
+                              type="button"
+                              onClick={() => removeSourceTargetRow(index)}
+                              aria-label={`Remove source-target pair ${index + 1}`}
+                              title="Remove source-target pair"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <button className="ontology-json-add-btn" type="button" onClick={addSourceTargetRow}>
+                      Add source-target
+                    </button>
                   </div>
                 </div>
               )}

@@ -62,6 +62,7 @@ export default function PromptLabelEditorModal({
   onRevertToDefault,
   onSyncFromDefault,
   onGenerateFromLlm,
+  onKeepRemainingOnGenerateChange,
   onSave,
 }) {
   if (!promptLabelEditor?.open) return null;
@@ -69,6 +70,13 @@ export default function PromptLabelEditorModal({
   const isNodeEdgesContentTab = String(activePromptLabelEditorTab ?? "").trim() === "node_edges_content";
   const isPromptTemplateEditorTab = isPromptTemplateTab(activePromptLabelEditorTab);
   const promptTemplateTextareaRef = useRef(null);
+  const footerActionsDisabled =
+    promptLabelEditor.syncing ||
+    promptLabelEditor.loadingPromptTemplate ||
+    promptLabelEditor.savingTypes ||
+    promptLabelEditor.generatingFromLlm ||
+    Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim());
+  const disableGenerateFromLlm = footerActionsDisabled || !canGenerateFromLlm;
 
   return (
     <div className="prompt-label-editor-overlay">
@@ -322,93 +330,73 @@ export default function PromptLabelEditorModal({
         </div>
         {promptLabelEditor.notice && <p className="status-line">{promptLabelEditor.notice}</p>}
         {promptLabelEditor.error && <p className="ontology-editor-error">{promptLabelEditor.error}</p>}
-        <div className="ontology-editor-actions">
-          <button
-            className="ontology-editor-cancel-btn"
-            type="button"
-            onClick={onClose}
-            disabled={
-              promptLabelEditor.syncing ||
-              promptLabelEditor.loadingPromptTemplate ||
-              promptLabelEditor.savingTypes ||
-              promptLabelEditor.generatingFromLlm ||
-              Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim())
-            }
-          >
-            Cancel
-          </button>
-          <button
-            className="ontology-editor-cancel-btn"
-            type="button"
-            onClick={onRevertToDefault}
-            disabled={
-              promptLabelEditor.loadingTypes ||
-              promptLabelEditor.loadingPromptTemplate ||
-              promptLabelEditor.syncing ||
-              promptLabelEditor.savingTypes ||
-              promptLabelEditor.generatingFromLlm ||
-              Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim())
-            }
-          >
-            Revert to Default
-          </button>
-          <button
-            className="ontology-editor-cancel-btn"
-            type="button"
-            onClick={onSyncFromDefault}
-            disabled={
-              (!isPromptTemplateTab(activePromptLabelEditorTab) && promptLabelEditor.isNewLabel) ||
-              promptLabelEditor.syncing ||
-              promptLabelEditor.loadingPromptTemplate ||
-              promptLabelEditor.savingTypes ||
-              promptLabelEditor.generatingFromLlm ||
-              Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim())
-            }
-          >
-            {promptLabelEditor.syncing ? "Syncing..." : "Sync From Default"}
-          </button>
+        <div className="ontology-editor-actions prompt-label-editor-actions">
           {isNodeEdgesTab && (
+            <div className="prompt-label-editor-actions-row prompt-label-editor-actions-row-top">
+              <label className="prompt-label-keep-remain-toggle">
+                <span className="prompt-label-keep-remain-text">Keep Remain</span>
+                <span className="prompt-label-slider-switch">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(promptLabelEditor.keepRemainingOnGenerate)}
+                    onChange={(event) => onKeepRemainingOnGenerateChange(event.target.checked)}
+                    disabled={footerActionsDisabled}
+                  />
+                  <span className="prompt-label-slider-track" />
+                </span>
+              </label>
+              <button
+                className="ontology-editor-cancel-btn"
+                type="button"
+                onClick={onGenerateFromLlm}
+                disabled={disableGenerateFromLlm}
+                title={generateFromLlmHelpText}
+              >
+                {promptLabelEditor.generatingFromLlm ? "Generating..." : "Generate From LLM"}
+              </button>
+            </div>
+          )}
+          <div className="prompt-label-editor-actions-row prompt-label-editor-actions-row-bottom">
+            <button className="ontology-editor-cancel-btn" type="button" onClick={onClose} disabled={footerActionsDisabled}>
+              Cancel
+            </button>
             <button
               className="ontology-editor-cancel-btn"
               type="button"
-              onClick={onGenerateFromLlm}
-              disabled={
-                promptLabelEditor.syncing ||
-                promptLabelEditor.loadingPromptTemplate ||
-                promptLabelEditor.savingTypes ||
-                promptLabelEditor.generatingFromLlm ||
-                Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim()) ||
-                !canGenerateFromLlm
-              }
-              title={generateFromLlmHelpText}
+              onClick={onRevertToDefault}
+              disabled={promptLabelEditor.loadingTypes || footerActionsDisabled}
             >
-              {promptLabelEditor.generatingFromLlm ? "Generating..." : "Generate From LLM"}
+              Revert to Default
             </button>
-          )}
-          <button
-            className="action-btn"
-            type="button"
-            onClick={onSave}
-            disabled={
-              promptLabelEditor.syncing ||
-              promptLabelEditor.loadingPromptTemplate ||
-              promptLabelEditor.savingTypes ||
-              promptLabelEditor.generatingFromLlm ||
-              Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim()) ||
-              (promptLabelEditor.isNewLabel && !isNodeEdgesContentTab) ||
-              !String(promptLabelEditor.labelName ?? "").trim()
-            }
-          >
-            {promptLabelEditor.savingTypes
-              ? promptLabelEditor.isNewLabel
-                ? "Creating..."
-                : "Saving..."
-              : promptLabelEditor.isNewLabel
-                ? isNodeEdgesContentTab
-                  ? "Create Label"
-                  : "Save Label"
-                : "Save Label"}
-          </button>
+            <button
+              className="ontology-editor-cancel-btn"
+              type="button"
+              onClick={onSyncFromDefault}
+              disabled={(!isPromptTemplateTab(activePromptLabelEditorTab) && promptLabelEditor.isNewLabel) || footerActionsDisabled}
+            >
+              {promptLabelEditor.syncing ? "Syncing..." : "Sync From Default"}
+            </button>
+            <button
+              className="action-btn"
+              type="button"
+              onClick={onSave}
+              disabled={
+                footerActionsDisabled ||
+                (promptLabelEditor.isNewLabel && !isNodeEdgesContentTab) ||
+                !String(promptLabelEditor.labelName ?? "").trim()
+              }
+            >
+              {promptLabelEditor.savingTypes
+                ? promptLabelEditor.isNewLabel
+                  ? "Creating..."
+                  : "Saving..."
+                : promptLabelEditor.isNewLabel
+                  ? isNodeEdgesContentTab
+                    ? "Create Label"
+                    : "Save Label"
+                  : "Save Label"}
+            </button>
+          </div>
         </div>
       </article>
     </div>

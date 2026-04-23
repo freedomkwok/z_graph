@@ -22,14 +22,22 @@ function getPreferredPromptLabel(catalogItems, desiredLabel) {
   const labels = Array.isArray(catalogItems) ? catalogItems : [];
   if (!labels.length) return normalizedDesired || "Production";
 
-  const hasDesired = labels.some(
-    (item) => String(item?.name ?? "").toLowerCase() === normalizedDesired.toLowerCase(),
-  );
-  if (hasDesired) return normalizedDesired;
+  const getLabelName = (item) => String(item?.display_name ?? item?.name ?? "").trim();
+  const normalizedDesiredLower = normalizedDesired.toLowerCase();
+  const matchedDesiredLabel = labels.find((item) => {
+    const displayName = getLabelName(item).toLowerCase();
+    const rawName = String(item?.name ?? "").trim().toLowerCase();
+    return displayName === normalizedDesiredLower || rawName === normalizedDesiredLower;
+  });
+  if (matchedDesiredLabel) {
+    return getLabelName(matchedDesiredLabel) || normalizedDesired;
+  }
 
-  const production = labels.find((item) => String(item?.name ?? "").toLowerCase() === "production");
-  if (production?.name) return String(production.name);
-  return String(labels[0]?.name ?? "Production");
+  const production = labels.find(
+    (item) => getLabelName(item).toLowerCase() === "production",
+  );
+  if (production) return getLabelName(production) || "Production";
+  return getLabelName(labels[0]) || "Production";
 }
 
 async function parseJsonResponse(response, endpointLabel) {

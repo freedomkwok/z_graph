@@ -1,5 +1,26 @@
 #!/usr/bin/env python3
-"""Download Langfuse prompts into local label-folder structure.
+"""
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Download Langfuse prompts into local label-folder structure.
 
 This module also exposes reusable functions for backend runtime use.
 """
@@ -9,69 +30,26 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import httpx
+from llm_inference_core.prompts.langfuse_sync_policy import LangfuseSyncPolicy
+
+from app.core.langfuse_versioning.zepgraph_langfuse_sync_policy import (
+    DEFAULT_ZEPGRAPH_LANGFUSE_SYNC_POLICY,
+)
+from app.core.langfuse_versioning.zepgraph_langfuse_sync_pull_layout import (
+    extract_prompt_items as _extract_prompt_items_from_payload,
+)
+from app.core.langfuse_versioning.zepgraph_langfuse_sync_pull_layout import (
+    extract_prompt_name_for_pull,
+    normalize_label,
+)
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = "app/core/langfuse_versioning"
-LANGFUSE_LIST_KEYS = ("data", "prompts", "items", "result")
-SUPPORTED_CATEGORIES = {"ontology_section", "sub_queries", "fallback_entities"}
-LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
-
-
-def normalize_label(value: str | None) -> str | None:
-    normalized = str(value or "").strip().lower()
-    return normalized or None
-
-
-def _normalize_prompt_name(value: str | None) -> str:
-    return str(value or "").strip().strip("/")
-
-
-def _normalize_category(value: str) -> str:
-    return str(value or "").strip().lower()
-
-
-def _looks_like_label_segment(value: str) -> bool:
-    return bool(LABEL_PATTERN.fullmatch(str(value or "").strip().lower()))
-
-
-def _extract_prompt_items(payload: Any) -> list[dict[str, Any]]:
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    if not isinstance(payload, dict):
-        return []
-    for key in LANGFUSE_LIST_KEYS:
-        value = payload.get(key)
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-    return []
-
-
-def _extract_prompt_name(item: dict[str, Any]) -> str | None:
-    raw_name = item.get("name")
-    if not isinstance(raw_name, str):
-        return None
-    normalized = _normalize_prompt_name(raw_name)
-    if not normalized:
-        return None
-    parts = [part for part in normalized.split("/") if part]
-    if not parts:
-        return None
-    category = _normalize_category(parts[0])
-    if category not in SUPPORTED_CATEGORIES:
-        return None
-    if category == "ontology_section":
-        if len(parts) < 3 or _normalize_category(parts[1]) not in {"prompts", "labels"}:
-            return None
-    if ".." in parts:
-        return None
-    return normalized
 
 
 def _extract_prompt_labels(item: dict[str, Any]) -> list[str]:
@@ -96,80 +74,76 @@ def _extract_prompt_labels(item: dict[str, Any]) -> list[str]:
     return labels
 
 
+def _merge_normalized_labels(*label_groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    for labels in label_groups:
+        for label in labels:
+            normalized = normalize_label(label)
+            if normalized and normalized not in merged:
+                merged.append(normalized)
+    return merged
+
+
+def _extract_labels_from_prompt_payload(payload: Any) -> list[str]:
+    labels: list[str] = []
+
+    def add_label(raw: Any) -> None:
+        normalized = normalize_label(str(raw or ""))
+        if normalized and normalized not in labels:
+            labels.append(normalized)
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            if "labels" in value:
+                raw_labels = value.get("labels")
+                if isinstance(raw_labels, str):
+                    add_label(raw_labels)
+                elif isinstance(raw_labels, list):
+                    for raw_label in raw_labels:
+                        add_label(raw_label)
+            if "label" in value:
+                add_label(value.get("label"))
+            for nested_value in value.values():
+                walk(nested_value)
+            return
+        if isinstance(value, list):
+            for nested_value in value:
+                walk(nested_value)
+
+    walk(payload)
+    return labels
+
+
 def _resolve_download_labels(
     *,
     available_labels: list[str],
     requested_label: str | None,
+    include_all_labels: bool,
 ) -> list[str | None]:
+    if include_all_labels:
+        ordered_labels: list[str | None] = []
+        if requested_label:
+            ordered_labels.append(requested_label)
+        for available_label in available_labels:
+            if available_label not in ordered_labels:
+                ordered_labels.append(available_label)
+        if not ordered_labels:
+            return [None]
+        if (
+            requested_label
+            and requested_label not in available_labels
+            and None not in ordered_labels
+        ):
+            ordered_labels.append(None)
+        return ordered_labels
+
     if requested_label:
-        if requested_label in available_labels:
-            return [requested_label]
-        if available_labels:
-            return available_labels
-        return [None]
+        # Strict mode: when caller requests a label (for example, skillregistry),
+        # only fetch that exact label and do not fallback to production/latest.
+        return [requested_label]
     if available_labels:
         return available_labels
     return [None]
-
-
-def _resolve_file_extension(prompt_name: str) -> str:
-    category = _normalize_category(prompt_name.split("/", 1)[0])
-    if category == "fallback_entities":
-        return ".json"
-    return ".md"
-
-
-def _build_target_relative_path(prompt_name: str, label: str | None) -> Path:
-    normalized_name = _normalize_prompt_name(prompt_name)
-    parts = [part for part in normalized_name.split("/") if part]
-    if len(parts) < 2:
-        raise ValueError(f"Invalid prompt name: {prompt_name}")
-
-    category = _normalize_category(parts[0])
-    file_name = parts[-1]
-    if "." not in file_name:
-        file_name = f"{file_name}{_resolve_file_extension(normalized_name)}"
-
-    normalized_label = normalize_label(label)
-
-    if category == "ontology_section":
-        section = _normalize_category(parts[1])
-        if section == "prompts":
-            relative_parts = ["ontology_section", "prompts"]
-            trailing_parts = parts[2:-1]
-            if trailing_parts and _looks_like_label_segment(trailing_parts[0]):
-                relative_parts.extend(trailing_parts)
-            else:
-                # Keep production as the default local folder for base ontology prompts.
-                relative_parts.append(normalized_label or "production")
-                relative_parts.extend(trailing_parts)
-            relative_parts.append(file_name)
-            return Path(*relative_parts)
-
-        if section == "labels":
-            relative_parts = ["ontology_section", "labels"]
-            trailing_parts = parts[2:-1]
-            if normalized_label:
-                relative_parts.append(normalized_label)
-                if trailing_parts and _looks_like_label_segment(trailing_parts[0]):
-                    trailing_parts = trailing_parts[1:]
-            relative_parts.extend(trailing_parts)
-            relative_parts.append(file_name)
-            return Path(*relative_parts)
-
-        raise ValueError(f"Unsupported ontology_section prompt name: {prompt_name}")
-
-    relative_parts = [_normalize_category(category)]
-    trailing_parts = parts[1:-1]
-
-    if normalized_label:
-        if trailing_parts and _looks_like_label_segment(trailing_parts[0]):
-            trailing_parts = trailing_parts[1:]
-        relative_parts.append(normalized_label)
-
-    relative_parts.extend(trailing_parts)
-    relative_parts.append(file_name)
-    return Path(*relative_parts)
 
 
 def _format_prompt_text(value: Any) -> str:
@@ -219,13 +193,13 @@ def _extract_prompt_text(payload: Any) -> str | None:
     return None
 
 
-def _fetch_prompt_text(
+def _fetch_prompt_payload(
     *,
     client: httpx.Client,
     base_url: str,
     prompt_name: str,
     label: str | None,
-) -> str:
+) -> Any | None:
     encoded_prompt_name = quote(prompt_name, safe="")
     endpoint = f"{base_url.rstrip('/')}/api/public/v2/prompts/{encoded_prompt_name}"
     params: dict[str, str] = {}
@@ -234,11 +208,29 @@ def _fetch_prompt_text(
         params["label"] = normalized_label
 
     response = client.get(endpoint, params=params or None)
-    if response.status_code == 404 and params:
-        response = client.get(endpoint)
+    if response.status_code == 404:
+        return None
     response.raise_for_status()
+    return response.json()
 
-    text = _extract_prompt_text(response.json())
+
+def _fetch_prompt_text(
+    *,
+    client: httpx.Client,
+    base_url: str,
+    prompt_name: str,
+    label: str | None,
+) -> str | None:
+    payload = _fetch_prompt_payload(
+        client=client,
+        base_url=base_url,
+        prompt_name=prompt_name,
+        label=label,
+    )
+    if payload is None:
+        return None
+
+    text = _extract_prompt_text(payload)
     if text is None:
         raise ValueError(f"Langfuse prompt payload has no prompt text: {prompt_name}")
     return text
@@ -250,6 +242,7 @@ def _list_prompt_items(
     base_url: str,
     limit: int,
     max_pages: int,
+    policy: LangfuseSyncPolicy,
 ) -> list[dict[str, Any]]:
     endpoint = f"{base_url.rstrip('/')}/api/public/v2/prompts"
     collected: list[dict[str, Any]] = []
@@ -258,7 +251,7 @@ def _list_prompt_items(
     for page in range(1, max_pages + 1):
         response = client.get(endpoint, params={"page": page, "limit": limit})
         response.raise_for_status()
-        items = _extract_prompt_items(response.json())
+        items = _extract_prompt_items_from_payload(response.json(), policy)
 
         before_count = len(collected)
         collected.extend(items)
@@ -285,7 +278,10 @@ def download_prompts_from_langfuse(
     dry_run: bool = False,
     limit: int = 100,
     max_pages: int = 100,
+    include_all_labels: bool = False,
+    policy: LangfuseSyncPolicy | None = None,
 ) -> dict[str, Any]:
+    sync_policy = policy or DEFAULT_ZEPGRAPH_LANGFUSE_SYNC_POLICY
     normalized_requested_label = normalize_label(requested_label)
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -299,17 +295,29 @@ def download_prompts_from_langfuse(
             base_url=base_url,
             limit=max(1, limit),
             max_pages=max(1, max_pages),
+            policy=sync_policy,
         )
 
         for item in prompt_items:
-            prompt_name = _extract_prompt_name(item)
+            prompt_name = extract_prompt_name_for_pull(item, sync_policy)
             if not prompt_name:
                 continue
 
-            available_labels = _extract_prompt_labels(item)
+            prompt_payload = _fetch_prompt_payload(
+                client=client,
+                base_url=base_url,
+                prompt_name=prompt_name,
+                label=None,
+            )
+            payload_labels = _extract_labels_from_prompt_payload(prompt_payload)
+            available_labels = _merge_normalized_labels(
+                _extract_prompt_labels(item),
+                payload_labels,
+            )
             download_labels = _resolve_download_labels(
                 available_labels=available_labels,
                 requested_label=normalized_requested_label,
+                include_all_labels=bool(include_all_labels),
             )
 
             for label in download_labels:
@@ -328,14 +336,11 @@ def download_prompts_from_langfuse(
                 except httpx.HTTPStatusError:
                     if label is None:
                         raise
-                    prompt_text = _fetch_prompt_text(
-                        client=client,
-                        base_url=base_url,
-                        prompt_name=prompt_name,
-                        label=None,
-                    )
+                    continue
+                if prompt_text is None:
+                    continue
 
-                target_rel_path = _build_target_relative_path(prompt_name, label)
+                target_rel_path = sync_policy.build_pull_target_relative_path(prompt_name, label)
                 target_abs_path = output_root / target_rel_path
                 if not dry_run:
                     target_abs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -367,7 +372,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        default=DEFAULT_OUTPUT,
+        default=DEFAULT_ZEPGRAPH_LANGFUSE_SYNC_POLICY.default_output_relative,
         help="Output directory relative to repo root.",
     )
     parser.add_argument(
@@ -394,6 +399,14 @@ def parse_args() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Preview files to be written without writing them.",
+    )
+    parser.add_argument(
+        "--include-all-labels",
+        action="store_true",
+        help=(
+            "When --label is provided, also fetch other available labels for each prompt. "
+            "Default behavior is strict label-only download."
+        ),
     )
     return parser.parse_args()
 
@@ -448,6 +461,7 @@ def main() -> int:
             dry_run=bool(args.dry_run),
             limit=max(1, int(args.limit)),
             max_pages=max(1, int(args.max_pages)),
+            include_all_labels=bool(args.include_all_labels),
         )
     except Exception as exc:
         print(f"Sync from Langfuse failed: {exc}", file=sys.stderr)

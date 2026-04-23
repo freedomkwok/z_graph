@@ -1,4 +1,24 @@
 """
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 Zep retrieval helpers for the report agent: graph search, node/edge reads, and related tools.
 
 Primary tools (optimized):
@@ -76,11 +96,28 @@ class ZepToolsService:
         api_key: str | None = None,
         llm_provider: OpenAIProvider | None = None,
         prompt_provider: PromptProvider | None = None,
+        project_id: str | None = None,
+        graph_backend: str | None = None,
     ):
         self.api_key = api_key or Config.ZEP_API_KEY
+        self.project_id = str(project_id or "").strip() or None
+        self.graph_backend = str(graph_backend or "").strip().lower() or None
+        resolved_graph_backend = self.graph_backend
+        if not resolved_graph_backend:
+            normalized_backend = str(Config.ZEP_BACKEND or "").strip().lower()
+            if normalized_backend == "graphiti":
+                resolved_graph_backend = str(Config.GRAPHITI_DB or "").strip().lower()
+            elif normalized_backend == "zep_cloud":
+                resolved_graph_backend = "zep_cloud"
+        if resolved_graph_backend == "oracle" and not self.project_id:
+            raise ValueError(
+                "ZepToolsService requires project_id when Oracle graph backend is enabled."
+            )
         self.client: ZepClientAdapter = create_zep_client(
             backend=Config.ZEP_BACKEND,
             api_key=self.api_key,
+            graph_backend=self.graph_backend,
+            project_id=self.project_id,
         )
         # Lazy LLM for InsightForge sub-queries
         self._llm_provider = llm_provider

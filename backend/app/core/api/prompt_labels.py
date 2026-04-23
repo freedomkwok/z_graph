@@ -1,8 +1,30 @@
+"""
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 import os
 import traceback
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Query
 from fastapi.responses import JSONResponse
 
 from app.core.managers.project_manager import ProjectManager
@@ -26,7 +48,24 @@ def _error_response(status_code: int, error: str, exc: Exception | None = None) 
     return JSONResponse(status_code=status_code, content=payload)
 
 
-def _extract_project_document_texts(project_id: str) -> tuple[list[str], list[str]]:
+def _normalize_pdf_page(value: Any, *, field_name: str, default: int | None = None) -> int | None:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{field_name} must be greater than 0")
+    return parsed
+
+
+def _extract_project_document_texts(
+    project_id: str,
+    *,
+    pdf_page_from: int | None = None,
+    pdf_page_to: int | None = None,
+) -> tuple[list[str], list[str]]:
     project = ProjectManager.get_project(project_id)
     if project is None:
         raise ValueError(f"Project not found: {project_id}")
@@ -39,7 +78,11 @@ def _extract_project_document_texts(project_id: str) -> tuple[list[str], list[st
             continue
 
         try:
-            extracted_text = FileParser.extract_text(file_path)
+            extracted_text = FileParser.extract_text(
+                file_path,
+                pdf_page_from=pdf_page_from,
+                pdf_page_to=pdf_page_to,
+            )
             extracted_text = TextProcessor.preprocess_text(extracted_text)
         except Exception as exc:
             logger.warning("Skip unreadable project file '%s': %s", file_path, str(exc))
@@ -120,9 +163,16 @@ def sync_prompt_label_from_langfuse(label_name: str) -> Any:
 
 
 @router.get("/prompt-label/{label_name}/types")
-def get_prompt_label_types(label_name: str) -> Any:
+def get_prompt_label_types(
+    label_name: str,
+    project_id: str | None = Query(default=None),
+) -> Any:
     try:
-        data = PromptLabelManager.get_label_type_lists(label_name)
+        normalized_project_id = str(project_id or "").strip() or None
+        data = PromptLabelManager.get_label_type_lists(
+            label_name,
+            project_id=normalized_project_id,
+        )
         return {
             "success": True,
             "data": data,
@@ -134,7 +184,13 @@ def get_prompt_label_types(label_name: str) -> Any:
 @router.patch("/prompt-label/{label_name}/types")
 def update_prompt_label_types(label_name: str, data: ProjectPatchBody) -> Any:
     try:
-        result = PromptLabelManager.update_label_type_lists(label_name, data)
+        payload = dict(data or {})
+        normalized_project_id = str(payload.pop("project_id", "") or "").strip() or None
+        result = PromptLabelManager.update_label_type_lists(
+            label_name,
+            payload,
+            project_id=normalized_project_id,
+        )
         return {
             "success": True,
             "message": f"Category label type lists updated: {result.get('label_name')}",
@@ -148,9 +204,18 @@ def update_prompt_label_types(label_name: str, data: ProjectPatchBody) -> Any:
 
 
 @router.get("/prompt-label/{label_name}/prompt-template/{prompt_key}")
-def get_prompt_label_prompt_template(label_name: str, prompt_key: str) -> Any:
+def get_prompt_label_prompt_template(
+    label_name: str,
+    prompt_key: str,
+    project_id: str | None = Query(default=None),
+) -> Any:
     try:
-        result = PromptLabelManager.get_label_prompt_template(label_name, prompt_key)
+        normalized_project_id = str(project_id or "").strip() or None
+        result = PromptLabelManager.get_label_prompt_template(
+            label_name,
+            prompt_key,
+            project_id=normalized_project_id,
+        )
         return {
             "success": True,
             "data": result,
@@ -169,10 +234,12 @@ def update_prompt_label_prompt_template(
 ) -> Any:
     try:
         payload = data or {}
+        normalized_project_id = str(payload.get("project_id", "") or "").strip() or None
         result = PromptLabelManager.update_label_prompt_template(
             label_name=label_name,
             prompt_key=prompt_key,
             content=payload.get("content", ""),
+            project_id=normalized_project_id,
         )
         return {
             "success": True,
@@ -186,16 +253,22 @@ def update_prompt_label_prompt_template(
         return _error_response(500, str(exc), exc)
 
 
-@router.post("/prompt-label/{label_name}/prompt-template/{prompt_key}/sync-from-default")
-def sync_prompt_label_prompt_template_from_default(label_name: str, prompt_key: str) -> Any:
+@router.get("/prompt-label/{label_name}/prompt-template/{prompt_key}/sync-from-default")
+def sync_prompt_label_prompt_template_from_default(
+    label_name: str,
+    prompt_key: str,
+    project_id: str | None = Query(default=None),
+) -> Any:
     try:
+        normalized_project_id = str(project_id or "").strip() or None
         result = PromptLabelManager.sync_label_prompt_template_from_default(
             label_name=label_name,
             prompt_key=prompt_key,
+            project_id=normalized_project_id,
         )
         return {
             "success": True,
-            "message": f"Prompt template synced from Production: {result.get('prompt_key')}",
+            "message": f"Prompt template synced from defaults: {result.get('prompt_key')}",
             "data": result,
         }
     except ValueError as exc:
@@ -213,8 +286,31 @@ def generate_prompt_label_types_from_llm(label_name: str, data: ProjectPatchBody
         if not project_id:
             return _error_response(400, "project_id is required")
         entity_edge_generator_prompt_content = payload.get("entity_edge_generator_prompt_content")
+        normalized_pdf_page_from = _normalize_pdf_page(
+            payload.get("pdf_page_from"),
+            field_name="pdf_page_from",
+            default=None,
+        )
+        normalized_pdf_page_to = _normalize_pdf_page(
+            payload.get("pdf_page_to"),
+            field_name="pdf_page_to",
+            default=None,
+        )
+        if (
+            normalized_pdf_page_from is not None
+            and normalized_pdf_page_to is not None
+            and normalized_pdf_page_from > normalized_pdf_page_to
+        ):
+            normalized_pdf_page_from, normalized_pdf_page_to = (
+                normalized_pdf_page_to,
+                normalized_pdf_page_from,
+            )
 
-        document_texts, processed_files = _extract_project_document_texts(project_id)
+        document_texts, processed_files = _extract_project_document_texts(
+            project_id,
+            pdf_page_from=normalized_pdf_page_from,
+            pdf_page_to=normalized_pdf_page_to,
+        )
         result = PromptLabelManager.generate_label_type_lists_from_documents(
             label_name,
             document_texts=document_texts,
@@ -229,6 +325,8 @@ def generate_prompt_label_types_from_llm(label_name: str, data: ProjectPatchBody
                 "project_id": project_id,
                 "processed_documents": len(document_texts),
                 "processed_files": processed_files,
+                "pdf_page_from": normalized_pdf_page_from,
+                "pdf_page_to": normalized_pdf_page_to,
             },
         }
     except ValueError as exc:

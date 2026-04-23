@@ -5,6 +5,7 @@ description = "z_graph backend service"
 requires-python = ">=3.11"
 authors = [{ name = "z_graph Team" }]
 dependencies = [
+    "llm-inference-core",
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",
@@ -21,12 +22,14 @@ dependencies = [
     "psycopg[binary]>=3.3.3",
     "pymupdf>=1.27.2.2",
     "zep-cloud>=0.28.2",
+    "llama-index",
+    "openinference-instrumentation-llama-index"
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.11.0"]
 graphiti = [
-   "graphiti-core",  # resolved from [tool.uv.sources] for local editable dev
+   "graphiti-core[oracle]",  # resolved from [tool.uv.sources] for local editable dev
 ]
 
 [build-system]
@@ -48,3 +51,4 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.uv.sources]
 graphiti-core = { path = "../../graphiti", editable = true }
+llm-inference-core = { path = "../../llm_inference_core", editable = true }

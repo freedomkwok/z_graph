@@ -1,3 +1,25 @@
+"""
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 from pathlib import Path
 
 
@@ -37,7 +59,13 @@ class FileParser:
     SUPPORTED_EXTENSIONS = {'.pdf', '.md', '.markdown', '.txt'}
     
     @classmethod
-    def extract_text(cls, file_path: str) -> str:
+    def extract_text(
+        cls,
+        file_path: str,
+        *,
+        pdf_page_from: int | None = None,
+        pdf_page_to: int | None = None,
+    ) -> str:
         path = Path(file_path)
         
         if not path.exists():
@@ -49,7 +77,11 @@ class FileParser:
             raise ValueError(f"unsupported file format: {suffix}")
         
         if suffix == '.pdf':
-            return cls._extract_from_pdf(file_path)
+            return cls._extract_from_pdf(
+                file_path,
+                page_from=pdf_page_from,
+                page_to=pdf_page_to,
+            )
         elif suffix in {'.md', '.markdown'}:
             return cls._extract_from_md(file_path)
         elif suffix == '.txt':
@@ -58,7 +90,12 @@ class FileParser:
         raise ValueError(f"Unsupported file format: {suffix}")
     
     @staticmethod
-    def _extract_from_pdf(file_path: str) -> str:
+    def _extract_from_pdf(
+        file_path: str,
+        *,
+        page_from: int | None = None,
+        page_to: int | None = None,
+    ) -> str:
         try:
             import fitz  # PyMuPDF
         except ImportError:
@@ -66,7 +103,23 @@ class FileParser:
         
         text_parts = []
         with fitz.open(file_path) as doc:
-            for page in doc:
+            total_pages = len(doc)
+            if total_pages <= 0:
+                return ""
+            if page_from is None and page_to is None:
+                start_index = 0
+                end_index = total_pages - 1
+            else:
+                normalized_from = max(1, int(page_from or 1))
+                normalized_to = max(1, int(page_to or total_pages))
+                if normalized_from > normalized_to:
+                    normalized_from, normalized_to = normalized_to, normalized_from
+                start_index = max(0, normalized_from - 1)
+                end_index = min(total_pages - 1, normalized_to - 1)
+            if start_index > end_index:
+                return ""
+            for page_index in range(start_index, end_index + 1):
+                page = doc[page_index]
                 text = page.get_text()
                 if text.strip():
                     text_parts.append(text)

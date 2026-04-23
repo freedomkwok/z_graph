@@ -1,0 +1,124 @@
+第一层：structured filter / graph filter
+先用你已有的结构条件缩小范围，比如：
+	•	只看某个 group_id
+	•	只看 Entity
+	•	只看 RELATES_TO
+	•	只看 relation_family = EMPLOYMENT
+
+这个阶段不是为了“找最像”，而是为了先把无关数据排掉。
+
+第二层：lexical / full-text search
+再用 name、summary、fact、content 做关键词召回。
+这层适合查：
+	•	明确出现过的词
+	•	专有名词
+	•	缩写
+	•	关系词
+	•	精确短语
+
+比如你搜 OpenAI, CEO, GraphRAG，full-text 往往很好用。
+
+第三层：embedding semantic search
+最后才是 embedding 去找语义上相近但字面不完全一样的内容。
+
+比如：
+	•	没写 works at，但写了 is employed by
+	•	没写 founded，但写了 co-created
+	•	summary 里是近义表达，不是原词
+
+这时候 embedding 很有价值。
+
+
+方案 A：先找 entity，再扩 edge
+	1.	用 OpenAI 去找最像的 entity node
+	2.	找到 canonical entity uuid
+	3.	再查和这个 entity 相连的 edges
+
+用户query
+-> 识别核心实体（OpenAI）
+-> 找到 canonical entity / aliases
+-> 用 entity uuid + alias expansion 缩小范围
+-> 再搜相关 edges/facts/episodes
+-> rerank
+
+
+query -> entity resolution -> edge retrieval 的最小可用流程。
+
+这层查的通常是：
+	•	entity.name_embedding
+	•	entity.summary_embedding
+	•	edge.fact_embedding
+	•	episode.content_embedding
+
+这层解决的是：
+更高级一点可以用 cross-encoder / LLM reranker
+
+user query: "facebook infra org"
+
+1. entity resolution:
+   find entity where canonical_name/aliases match facebook
+   -> Meta (E123)
+
+2. query expansion:
+   facebook OR meta OR "meta platforms"
+
+3. structured filter:
+   only edges connected to E123
+
+4. full-text recall:
+   search facts / summaries / episodes
+
+5. embedding rerank:
+   rerank semantic matches
+
+6. return:
+   edges around Meta + evidence episodes
+
+   SELECT gb.*
+FROM projects p
+JOIN graph_build gb ON gb.task_id = p.project_data->>'graph_build_task_id'
+WHERE p.project_id = '<your_project_id>';
+
+
+FACTS and ENTITIES represent relevant context to the current conversation.
+
+# These are the most relevant facts and their valid date ranges
+# format: FACT (Date range: from - to)
+# NOTE: Facts ending in "present" are currently valid (e.g., "Jane prefers her coffee with milk (2024-01-15 10:30:00 - present)" means Jane currently prefers coffee with milk)
+#       Facts with a past end date used to be valid but are NOT CURRENTLY VALID (e.g., "Jane prefers her coffee with milk (2024-01-15 10:30:00 - 2024-06-20 14:00:00)" means Jane no longer prefers coffee with milk)
+<FACTS>
+  - The 1975 has upcoming performances that Sarah Smith is inquiring about. (2025-10-16 21:56:55 - present)
+  - Sarah Smith is inquiring if indie rock artists like Arctic Monkeys perform at Brooklyn Steel. (2025-10-16 21:56:55 - present)
+  - The 1975 is associated with the indie_rock genre. (2025-10-16 21:56:54 - present)
+  - Indie rock artists might be performing in New York soon. (2025-10-16 21:56:55 - present)
+  - Sarah Smith is looking for upcoming shows in New York. (2025-10-16 21:56:55 - present)
+  - Sarah Smith prefers the music genre indie_rock. (2025-10-16 21:56:52 - present)
+  - Sarah Smith is looking for concerts in New York. (2025-10-16 21:56:55 - present)
+  - Sarah Smith likes Taylor Swift. (2025-10-16 21:56:55 - present)
+  - Sarah Smith is asking when tickets for The 1975 go on sale. (2025-10-16 21:56:55 - present)
+  - Sarah Smith desires to see the Arctic Monkeys at both shows. (2025-10-16 21:56:55 - present)
+</FACTS>
+
+
+# These are the most relevant entities
+# Name: ENTITY_NAME
+# Label: entity_label (if present)
+# Attributes: (if present)
+#   attr_name: attr_value
+# Summary: entity summary
+<ENTITIES>
+  - Name: The 1975
+    Summary: The 1975, an indie rock artist from England, has upcoming tour dates in New York, including a show at Radio City Music Hall. Tickets for the tour go on general sale Friday.
+  - Name: indie rock artists
+    Label: Topic
+    Summary: Sarah Smith is seeking recommendations for indie rock artists performing in New York soon, similar to Arctic Monkeys.
+  - Name: New York
+    Label: Location
+    Summary: New York is hosting concerts for Taylor Swift (pop) at Madison Square Garden, Arctic Monkeys (indie rock) at Brooklyn Steel, and The 1975 (recommended to Sarah Smith). Sarah prefers good seating.
+  - Name: indie_rock
+    Label: Preference
+    Summary: Sarah4969 has an indie_rock preference, linked to artists like Arctic Monkeys and Phoebe Bridgers. Sarah is interested in indie rock concerts at Brooklyn Steel and pop concerts in New York.
+  - Name: concert
+    Label: Event
+    Summary: Sarah Smith is interested in concerts for Taylor Swift and Arctic Monkeys, seeking seating details for Madison Square Garden and Brooklyn Steel, and dinner options before the shows.
+</ENTITIES>

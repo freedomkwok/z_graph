@@ -21,6 +21,7 @@ export default function GraphInspectorPanel({
   toggleEdgeType,
   selectedEdgeStats,
   selectedEdgeEpisodeIds,
+  onOpenEdgeStatsList,
 }) {
   return (
     <div className="graph-legend graph-inspector-panel">
@@ -80,7 +81,7 @@ export default function GraphInspectorPanel({
           <div className="entity-filter-list">
             {visibleEntityTypeOptions.length > 0 ? (
               visibleEntityTypeOptions.map((type) => (
-                <label className="legend-item entity-filter-item" key={type.name}>
+                <label className="legend-item entity-filter-item edge-filter-item" key={type.name}>
                   <input
                     className="entity-filter-checkbox"
                     type="checkbox"
@@ -88,7 +89,8 @@ export default function GraphInspectorPanel({
                     onChange={() => toggleEntityType(type.name)}
                   />
                   <span className="legend-dot" style={{ background: type.color }} />
-                  <span className="legend-label">{type.name}</span>
+                  <span className="legend-label edge-filter-label">{type.name}</span>
+                  <span className="edge-filter-count">{type.count}</span>
                 </label>
               ))
             ) : (
@@ -150,31 +152,48 @@ export default function GraphInspectorPanel({
           {selectedEdgeStats ? (
             <>
               <div className="edge-stats-relation-name">Relation: {selectedEdgeStats.relation}</div>
+              <div className="edge-stats-hint">Click a card to view matching edges.</div>
               <div className="graph-detail-columns edge-stats-columns">
-                <div className="graph-detail-column">
+                <button
+                  className="graph-detail-column edge-stats-clickable"
+                  type="button"
+                  onClick={() => onOpenEdgeStatsList?.("sameRelationPair")}
+                >
                   <span className="graph-detail-column-label">Similar (Pair)</span>
                   <span className="graph-detail-column-value">
                     {selectedEdgeStats.sameRelationPairCount}
                   </span>
-                </div>
-                <div className="graph-detail-column">
+                </button>
+                <button
+                  className="graph-detail-column edge-stats-clickable"
+                  type="button"
+                  onClick={() => onOpenEdgeStatsList?.("sameRelationDirected")}
+                >
                   <span className="graph-detail-column-label">Similar (Direction)</span>
                   <span className="graph-detail-column-value">
                     {selectedEdgeStats.sameRelationDirectedCount}
                   </span>
-                </div>
-                <div className="graph-detail-column">
+                </button>
+                <button
+                  className="graph-detail-column edge-stats-clickable"
+                  type="button"
+                  onClick={() => onOpenEdgeStatsList?.("sameUndirectedPair")}
+                >
                   <span className="graph-detail-column-label">Parallel (Pair)</span>
                   <span className="graph-detail-column-value">
                     {selectedEdgeStats.sameUndirectedPairCount}
                   </span>
-                </div>
-                <div className="graph-detail-column">
+                </button>
+                <button
+                  className="graph-detail-column edge-stats-clickable"
+                  type="button"
+                  onClick={() => onOpenEdgeStatsList?.("sameRelationGlobal")}
+                >
                   <span className="graph-detail-column-label">Relation (Graph)</span>
                   <span className="graph-detail-column-value">
                     {selectedEdgeStats.sameRelationGlobalCount}
                   </span>
-                </div>
+                </button>
               </div>
               <div className="edge-stats-episodes-total">
                 Episodes (Total: {selectedEdgeEpisodeIds.length})

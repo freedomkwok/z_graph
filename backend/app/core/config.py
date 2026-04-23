@@ -1,3 +1,25 @@
+"""
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 from functools import lru_cache
 from pathlib import Path
 
@@ -33,15 +55,25 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model_name: str = "gpt-4o-mini"
+    max_text_length_for_llm: int = 128000
     llm_max_retries: int = 3
     llm_initial_delay_seconds: float = 1.0
     llm_max_delay_seconds: float = 30.0
     llm_backoff_factor: float = 2.0
+    task_poll_interval_ms: int = 2000
+    # Slower interval for full graph payload polling while a graph build is in progress (frontend).
+    graph_data_poll_interval_ms: int = 10000
+    # Episodes per batch when pushing chunks to the graph backend (overridable per /api/build request).
+    graph_build_batch_size: int = 5
+    # Timeout budget per graph for warm-up calls triggered by GET /api/project/{project_id}.
+    project_get_warmup_timeout_seconds: float = 3.0
+    # Skip repeated GET warm-up for same project/ontology/graph key within this window.
+    project_get_warmup_dedupe_ttl_seconds: int = 30
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
     langfuse_base_url: str | None = None
-    apply_langfuse_to_graphiti_trace: bool = False
+    apply_langfuse_to_graphiti_trace: bool = True
     langfuse_otel_endpoint: str | None = None
     langfuse_otel_auth: str | None = None
     zep_api_key: str | None = None
@@ -49,15 +81,24 @@ class Settings(BaseSettings):
     zep_graph_url_template: str | None = None
     zep_backend: str | None = None
     graphiti_db: str = "neo4j"
+    # Comma-separated candidate embedding models for Graphiti UI/selection.
+    # Example: "text-embedding-3-large,text-embedding-3-small"
+    graphiti_embedding_model: str = "text-embedding-3-large"
     graphdb_uri: str | None = None
     graphdb_user: str | None = None
     graphdb_password: str | None = None
     graphdb_dsn: str | None = None
     oracle_use_rdf: bool = False
+    oracle_log_queries: bool = False
     oracle_rdf_network_owner: str | None = None
     oracle_rdf_network_name: str | None = None
     oracle_rdf_graph_name: str | None = None
     oracle_rdf_tablespace: str | None = None
+    oracle_pg_graph_id: str | None = None
+    oracle_pool_min: int | None = None
+    oracle_pool_max: int | None = None
+    oracle_pool_increment: int | None = None
+    oracle_max_coroutines: int | None = 20
     openai_api_key: str | None = None
     openai_base_url: str | None = None
 
@@ -113,10 +154,16 @@ class Config:
     LLM_API_KEY = settings.llm_api_key
     LLM_BASE_URL = settings.llm_base_url
     LLM_MODEL_NAME = settings.llm_model_name
+    MAX_TEXT_LENGTH_FOR_LLM = settings.max_text_length_for_llm
     LLM_MAX_RETRIES = settings.llm_max_retries
     LLM_INITIAL_DELAY_SECONDS = settings.llm_initial_delay_seconds
     LLM_MAX_DELAY_SECONDS = settings.llm_max_delay_seconds
     LLM_BACKOFF_FACTOR = settings.llm_backoff_factor
+    TASK_POLL_INTERVAL_MS = settings.task_poll_interval_ms
+    GRAPH_DATA_POLL_INTERVAL_MS = settings.graph_data_poll_interval_ms
+    GRAPH_BUILD_BATCH_SIZE = settings.graph_build_batch_size
+    PROJECT_GET_WARMUP_TIMEOUT_SECONDS = settings.project_get_warmup_timeout_seconds
+    PROJECT_GET_WARMUP_DEDUPE_TTL_SECONDS = settings.project_get_warmup_dedupe_ttl_seconds
 
     LANGFUSE_PUBLIC_KEY = settings.langfuse_public_key
     LANGFUSE_SECRET_KEY = settings.langfuse_secret_key
@@ -132,16 +179,29 @@ class Config:
     # Prefer ZEP_BACKEND; keep ZEP_CORE for backward compatibility.
     ZEP_BACKEND = settings.zep_backend
     GRAPHITI_DB = settings.graphiti_db
+    GRAPHITI_EMBEDDING_MODEL = str(settings.graphiti_embedding_model or "").strip()
+    GRAPHITI_EMBEDDING_MODELS = [
+        model.strip()
+        for model in str(settings.graphiti_embedding_model or "").split(",")
+        if model.strip()
+    ] or ["text-embedding-3-large"]
+    GRAPHITI_DEFAULT_EMBEDDING_MODEL = GRAPHITI_EMBEDDING_MODELS[0]
 
     GRAPHDB_URI = settings.graphdb_uri
     GRAPHDB_USER = settings.graphdb_user
     GRAPHDB_PASSWORD = settings.graphdb_password
     GRAPHDB_DSN = settings.graphdb_dsn
     ORACLE_USE_RDF = settings.oracle_use_rdf
+    ORACLE_LOG_QUERIES = settings.oracle_log_queries
     ORACLE_RDF_NETWORK_OWNER = settings.oracle_rdf_network_owner
     ORACLE_RDF_NETWORK_NAME = settings.oracle_rdf_network_name
     ORACLE_RDF_GRAPH_NAME = settings.oracle_rdf_graph_name
     ORACLE_RDF_TABLESPACE = settings.oracle_rdf_tablespace
+    ORACLE_PG_GRAPH_ID = settings.oracle_pg_graph_id
+    ORACLE_POOL_MIN = settings.oracle_pool_min
+    ORACLE_POOL_MAX = settings.oracle_pool_max
+    ORACLE_POOL_INCREMENT = settings.oracle_pool_increment
+    ORACLE_MAX_COROUTINES = settings.oracle_max_coroutines
 
     OPENAI_API_KEY = settings.openai_api_key
     OPENAI_BASE_URL = settings.openai_base_url

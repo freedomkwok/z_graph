@@ -1,0 +1,12 @@
+- ChatLog
+- ChatScreenshot
+- DraftMessage
+- ConversationStage
+- InteractionPace
+- SocialMove
+- ConversationBottleneck
+- EscalationTarget
+- PlatformChannel
+- ApplicabilityScope
+- ExclusionScope
+- RiskConstraint

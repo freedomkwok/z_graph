@@ -22,7 +22,9 @@
 ## Editing Workflows Inside TaskPanel
 
 - Ontology type editor:
-  - open entity/relationship editors from stat cards
+  - single modal opened from Step A stat cards; Entity Types vs Relationship Types stat picks the active tab
+  - tab strip switches between entity and relationship tag lists in one dialog
+  - per-tab Edit toggles remove mode (× on each tag); Confirm persists both lists to the project
   - tag-based type name edits
   - nested property editor for metadata/attributes/source-targets
   - JSON validation before confirm

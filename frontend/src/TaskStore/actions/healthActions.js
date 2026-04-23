@@ -1,6 +1,28 @@
 import { BACKEND_DISPLAY_URL } from "../constants";
 
-function createHealthActions({ dispatch, addSystemLog, withApiBase }) {
+function createHealthActions({ dispatch, addSystemLog, withApiBase, trackedFetch }) {
+  const normalizeTaskPollIntervalMs = (value, fallback = 2000) => {
+    const parsed = Number.parseInt(String(value ?? ""), 10);
+    if (!Number.isFinite(parsed) || parsed < 500) return fallback;
+    return parsed;
+  };
+
+  const normalizeGraphDataPollIntervalMs = (value, fallback = 10000) => {
+    const parsed = Number.parseInt(String(value ?? ""), 10);
+    if (!Number.isFinite(parsed) || parsed < 2000) return fallback;
+    return parsed;
+  };
+
+  const normalizeGraphitiEmbeddingModelOptions = (value) => {
+    const options = Array.isArray(value)
+      ? value.map((item) => String(item ?? "").trim()).filter(Boolean)
+      : String(value ?? "")
+          .split(",")
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean);
+    return options.length ? options : ["text-embedding-3-large"];
+  };
+
   const checkBackendHealth = async () => {
     dispatch({ type: "PATCH_BACKEND_HEALTH", payload: { loading: true } });
     let latencyMs = null;
@@ -9,10 +31,14 @@ function createHealthActions({ dispatch, addSystemLog, withApiBase }) {
         typeof performance !== "undefined" && typeof performance.now === "function"
           ? performance.now()
           : Date.now();
-      const healthResponse = await fetch(withApiBase("/api/health"), {
-        cache: "no-store",
-        headers: { Accept: "application/json" },
-      });
+      const healthResponse = await (trackedFetch || fetch)(
+        withApiBase("/api/health"),
+        {
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        },
+        { source: "health" },
+      );
       const endedAt =
         typeof performance !== "undefined" && typeof performance.now === "function"
           ? performance.now()
@@ -48,6 +74,17 @@ function createHealthActions({ dispatch, addSystemLog, withApiBase }) {
             neo4j: Boolean(healthData?.graph_backend_options?.neo4j),
             oracle: Boolean(healthData?.graph_backend_options?.oracle),
           },
+          taskPollIntervalMs: normalizeTaskPollIntervalMs(healthData?.task_poll_interval_ms),
+          graphDataPollIntervalMs: normalizeGraphDataPollIntervalMs(
+            healthData?.graph_data_poll_interval_ms,
+          ),
+          graphitiEmbeddingModelOptions: normalizeGraphitiEmbeddingModelOptions(
+            healthData?.graphiti_embedding_model_options,
+          ),
+          graphitiDefaultEmbeddingModel:
+            String(healthData?.graphiti_default_embedding_model ?? "").trim() ||
+            "text-embedding-3-large",
+          graphitiTracingDefaultEnabled: Boolean(healthData?.graphiti_tracing_default_enabled),
           latencyMs,
           message: "Healthy",
         },
@@ -68,6 +105,11 @@ function createHealthActions({ dispatch, addSystemLog, withApiBase }) {
             neo4j: false,
             oracle: false,
           },
+          taskPollIntervalMs: 2000,
+          graphDataPollIntervalMs: 10000,
+          graphitiEmbeddingModelOptions: ["text-embedding-3-large"],
+          graphitiDefaultEmbeddingModel: "text-embedding-3-large",
+          graphitiTracingDefaultEnabled: true,
           latencyMs,
           message: String(error),
         },

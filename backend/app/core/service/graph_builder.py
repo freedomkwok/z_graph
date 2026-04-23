@@ -1,7 +1,33 @@
+"""
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 import inspect
+import logging
+import re
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
+from collections import defaultdict
 from collections.abc import Callable
 from typing import Any, Optional
 
@@ -18,12 +44,19 @@ from app.core.utils.text_processor import TextProcessor
 from pydantic import Field
 from zep_cloud.external_clients.ontology import EdgeModel, EntityModel, EntityText
 
+logger = logging.getLogger("uvicorn.error")
+
+
+class TaskCancelledError(RuntimeError):
+    """Raised when a running background task is cancelled."""
+
 
 class GraphBuilderService:
     """
     Graph build service.
     Calls the Zep API to build the knowledge graph.
     """
+    _FILE_HEADER_PATTERN = re.compile(r"^\s*===\s*(.+?)\s*===", re.MULTILINE)
 
     def __init__(
         self,
@@ -31,19 +64,49 @@ class GraphBuilderService:
         client: ZepClientAdapter | None = None,
         backend: str | None = None,
         graph_backend: str | None = None,
+        graphiti_embedding_model: str | None = None,
+        project_id: str | None = None,
+        enable_otel_tracing: bool | None = None,
+        oracle_pool_min: int | None = None,
+        oracle_pool_max: int | None = None,
+        oracle_pool_increment: int | None = None,
+        oracle_max_coroutines: int | None = None,
     ):
         self.backend = backend
         self.graph_backend = graph_backend
+        self.graphiti_embedding_model = str(graphiti_embedding_model or "").strip() or None
         self.api_key = api_key or Config.ZEP_API_KEY
+        self.project_id = str(project_id or "").strip() or None
+        self.enable_otel_tracing = enable_otel_tracing
+        self.oracle_pool_min = oracle_pool_min
+        self.oracle_pool_max = oracle_pool_max
+        self.oracle_pool_increment = oracle_pool_increment
+        self.oracle_max_coroutines = oracle_max_coroutines
 
         # If caller provides a client, we trust it and only validate interface shape/signatures.
         self.client: ZepClientAdapter = client or create_zep_client(
             backend=self.backend,
             api_key=self.api_key,
             graph_backend=self.graph_backend,
+            graphiti_embedding_model=self.graphiti_embedding_model,
+            project_id=self.project_id,
+            enable_otel_tracing=self.enable_otel_tracing,
+            oracle_pool_min=self.oracle_pool_min,
+            oracle_pool_max=self.oracle_pool_max,
+            oracle_pool_increment=self.oracle_pool_increment,
+            oracle_max_coroutines=self.oracle_max_coroutines,
         )
         self.task_manager = TaskManager()
 
+    def _graph_backend_display_name(self) -> str:
+        normalized = str(self.graph_backend or "").strip().lower()
+        if normalized == "zep_cloud":
+            return "Zep Cloud"
+        if normalized == "neo4j":
+            return "Neo4j"
+        if normalized == "oracle":
+            return "Oracle"
+        return "Graph Backend"
 
     def build_graph_async(
         self,
@@ -54,14 +117,17 @@ class GraphBuilderService:
         graph_id: str | None = None,
         chunk_size: int = 500,
         chunk_overlap: int = 50,
-        batch_size: int = 3,
+        batch_size: int = 5,
     ) -> str:
         # Create task
         task_id = self.task_manager.create_task(
             task_type="graph_build",
             metadata={
+                "project_id": project_id,
                 "graph_name": graph_name,
+                "graph_backend": self.graph_backend,
                 "chunk_size": chunk_size,
+                "chunk_overlap": chunk_overlap,
                 "text_length": len(text),
             },
         )
@@ -132,7 +198,9 @@ class GraphBuilderService:
             )
 
             self.task_manager.update_task(
-                task_id, progress=60, message="waiting for Zep to process data"
+                task_id,
+                progress=60,
+                message=f"Waiting for {self._graph_backend_display_name()} to process data",
             )
 
             self._wait_for_episodes(
@@ -197,7 +265,7 @@ class GraphBuilderService:
             created_graph = self.client.create_graph(
                 graph_id=new_graph_id,
                 name=name,
-                description="Zep Graph",
+                description=f"{self._graph_backend_display_name()} Graph",
             )
             return new_graph_id, self._extract_project_workspace_id(created_graph)
         except Exception as error:
@@ -294,17 +362,27 @@ class GraphBuilderService:
         self,
         graph_id: str,
         chunks: list[str],
-        batch_size: int = 3,
+        batch_size: int = 5,
         progress_callback: Callable | None = None,
+        checkpoint_callback: Callable[[int, int], None] | None = None,
+        start_batch_index: int = 0,
+        should_stop: Callable[[], bool] | None = None,
     ) -> list[str]:
         """Add text in batches; returns episode UUIDs."""
         episode_uuids = []
         total_chunks = len(chunks)
+        total_batches = (total_chunks + batch_size - 1) // batch_size if total_chunks > 0 else 0
+        normalized_start_batch = max(0, int(start_batch_index or 0))
 
         for i in range(0, total_chunks, batch_size):
+            if should_stop and should_stop():
+                raise TaskCancelledError("Task cancelled while adding text batches")
             batch_chunks = chunks[i : i + batch_size]
             batch_num = i // batch_size + 1
-            total_batches = (total_chunks + batch_size - 1) // batch_size
+            batch_index = batch_num - 1
+
+            if batch_index < normalized_start_batch:
+                continue
 
             if progress_callback:
                 progress = (i + len(batch_chunks)) / total_chunks
@@ -315,11 +393,25 @@ class GraphBuilderService:
             episodes = [{"data": chunk, "type": "text"} for chunk in batch_chunks]
 
             try:
+                batch_t0 = time.perf_counter()
                 batch_result = self.client.add_episode_batch(graph_id=graph_id, episodes=episodes)
                 if batch_result and isinstance(batch_result, list):
                     episode_uuids.extend([str(ep_uuid) for ep_uuid in batch_result if ep_uuid])
+                if checkpoint_callback:
+                    checkpoint_callback(batch_index, total_batches)
 
                 time.sleep(1)
+                elapsed_s = time.perf_counter() - batch_t0
+                at_utc = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+                logger.info(
+                    "Episode batch done at=%s episodes=%s batch=%s/%s graph_id=%s elapsed_s=%.3f",
+                    at_utc,
+                    len(episodes),
+                    batch_num,
+                    total_batches,
+                    graph_id,
+                    elapsed_s,
+                )
 
             except Exception as e:
                 if progress_callback:
@@ -333,6 +425,7 @@ class GraphBuilderService:
         episode_uuids: list[str],
         progress_callback: Callable | None = None,
         timeout: int = 600,
+        should_stop: Callable[[], bool] | None = None,
     ):
         if not episode_uuids:
             if progress_callback:
@@ -348,6 +441,8 @@ class GraphBuilderService:
             progress_callback(f"Waiting for {total_episodes} text chunks to be processed...", 0)
 
         while pending_episodes:
+            if should_stop and should_stop():
+                raise TaskCancelledError("Task cancelled while waiting for episodes")
             if time.time() - start_time > timeout:
                 if progress_callback:
                     progress_callback(
@@ -451,6 +546,18 @@ class GraphBuilderService:
                 if key not in payload:
                     payload[key] = value
         return payload
+
+    @classmethod
+    def _extract_episode_source_label(cls, episode_payload: dict[str, Any]) -> str:
+        raw_data = episode_payload.get("data")
+        if isinstance(raw_data, str):
+            match = cls._FILE_HEADER_PATTERN.search(raw_data)
+            if match:
+                return str(match.group(1) or "").strip()
+        source_description = episode_payload.get("source_description")
+        if isinstance(source_description, str):
+            return source_description.strip()
+        return ""
 
     def _collect_episode_data(self, episode_ids: set[str]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
         if not episode_ids:
@@ -573,6 +680,45 @@ class GraphBuilderService:
         episode_errors: list[dict[str, str]] = []
         if include_episode_data:
             episodes_data, episode_errors = self._collect_episode_data(set(episode_ids))
+
+        episode_source_by_id: dict[str, str] = {}
+        for episode in episodes_data:
+            episode_id = str(episode.get("uuid") or "").strip()
+            if not episode_id:
+                continue
+            source_label = self._extract_episode_source_label(episode)
+            if source_label:
+                episode_source_by_id[episode_id] = source_label
+
+        node_sources: dict[str, set[str]] = defaultdict(set)
+        for edge in edges_data:
+            edge_episodes = edge.get("episodes", [])
+            if not isinstance(edge_episodes, list):
+                continue
+            source_node_uuid = str(edge.get("source_node_uuid") or "").strip()
+            target_node_uuid = str(edge.get("target_node_uuid") or "").strip()
+            for episode_id in edge_episodes:
+                normalized_episode_id = str(episode_id or "").strip()
+                if not normalized_episode_id:
+                    continue
+                source_label = episode_source_by_id.get(normalized_episode_id)
+                if not source_label:
+                    continue
+                if source_node_uuid:
+                    node_sources[source_node_uuid].add(source_label)
+                if target_node_uuid:
+                    node_sources[target_node_uuid].add(source_label)
+
+        for node in nodes_data:
+            node_uuid = str(node.get("uuid") or "").strip()
+            source_file_name = sorted(node_sources.get(node_uuid, set()))
+            if not source_file_name:
+                continue
+            attributes = node.get("attributes", {})
+            if not isinstance(attributes, dict):
+                attributes = {}
+            attributes["source_files"] = source_file_name
+            node["attributes"] = attributes
 
         return {
             "graph_id": graph_id,

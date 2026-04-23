@@ -1,9 +1,34 @@
+"""
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 import asyncio
+import inspect
 import logging
 import os
 import threading
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from app.core.config import Config
 from app.core.backend_client_factory.schema import (
     ZepClientAdapter,
     GraphNode,
@@ -54,7 +79,7 @@ def _ensure_async_loop():
 def _run_async(coro):
     loop = _ensure_async_loop()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return future.result(timeout=300)  # Timeout is 5 minutes
+    return future.result(timeout=900)  # Timeout is 5 minutes
 
 class EmbedderClientWrapper:
     def __init__(self, embedder: Any, max_batch_size: int = 10):
@@ -110,6 +135,10 @@ def _create_dashscope_embedder_wrapper(base_embedder: Any, max_batch_size: int =
 
 
 class GraphitiClient(ZepClientAdapter):
+    _ONTOLOGY_CACHE_MAX_SIZE = 200
+    _ontology_cache_lock = threading.Lock()
+    _ontology_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+
     def __init__(
         self,
         graphdb_uri: str | None = None,
@@ -118,6 +147,8 @@ class GraphitiClient(ZepClientAdapter):
         llm_client: Optional[Any] = None,
         embedder: Optional[Any] = None,
         graph_driver: GraphDriver | None = None,
+        embedding_model: str | None = None,
+        enable_otel_tracing: bool | None = None,
     ):
         self.graphdb_uri = graphdb_uri
         self.graphdb_user = graphdb_user
@@ -125,13 +156,75 @@ class GraphitiClient(ZepClientAdapter):
         self._llm_client = llm_client
         self._embedder = embedder
         self.graph_driver = graph_driver
+        self.embedding_model = str(embedding_model or "").strip() or None
+        self.enable_otel_tracing = enable_otel_tracing
 
         self._graphiti = None
         self._driver = None
         self._initialized = False
 
         self._graph_metadata: Dict[str, Dict[str, Any]] = {}
-        self._ontology_cache: Dict[str, Dict[str, Any]] = {}
+
+    @classmethod
+    def _normalize_graph_id(cls, graph_id: Any) -> str:
+        return str(graph_id or "").strip()
+
+    @classmethod
+    def _set_cached_ontology(
+        cls,
+        graph_id: str,
+        entities: Optional[Dict[str, Any]],
+        edges: Optional[Dict[str, Any]],
+    ) -> None:
+        normalized_graph_id = cls._normalize_graph_id(graph_id)
+        if not normalized_graph_id:
+            return
+
+        ontology_entry = {
+            "entities": dict(entities or {}),
+            "edges": dict(edges or {}),
+        }
+
+        with cls._ontology_cache_lock:
+            if normalized_graph_id in cls._ontology_cache:
+                cls._ontology_cache.pop(normalized_graph_id, None)
+            cls._ontology_cache[normalized_graph_id] = ontology_entry
+            cls._ontology_cache.move_to_end(normalized_graph_id)
+            while len(cls._ontology_cache) > cls._ONTOLOGY_CACHE_MAX_SIZE:
+                cls._ontology_cache.popitem(last=False)
+
+    @classmethod
+    def _get_cached_ontology(cls, graph_id: str) -> Dict[str, Any]:
+        normalized_graph_id = cls._normalize_graph_id(graph_id)
+        if not normalized_graph_id:
+            return {}
+
+        with cls._ontology_cache_lock:
+            ontology_entry = cls._ontology_cache.get(normalized_graph_id)
+            if ontology_entry is None:
+                return {}
+            cls._ontology_cache.move_to_end(normalized_graph_id)
+            return ontology_entry
+
+    @classmethod
+    def _remove_cached_ontology(cls, graph_id: str) -> None:
+        normalized_graph_id = cls._normalize_graph_id(graph_id)
+        if not normalized_graph_id:
+            return
+        with cls._ontology_cache_lock:
+            cls._ontology_cache.pop(normalized_graph_id, None)
+
+    def _ensure_graph_constraints(self, graph_id: str) -> None:
+        """Ensure Graphiti is initialized before graph-scoped operations.
+
+        Indices and constraints are created once in ``_ensure_initialized`` for the
+        whole Neo4j database or Oracle PG project (Graphiti driver scope). They are not
+        per logical ``group_id``/graph_id; re-running DDL for each new graph caused
+        redundant locks.
+        """
+        if not self._normalize_graph_id(graph_id):
+            return
+        self._ensure_initialized()
 
     def _ensure_initialized(self):
         if self._initialized:
@@ -139,9 +232,9 @@ class GraphitiClient(ZepClientAdapter):
 
         try:
             from graphiti_core import Graphiti
-            from app.core.backend_client_factory.graphiti.patcher import apply_patch
+            # from app.core.backend_client_factory.graphiti.patcher import apply_patch
 
-            apply_patch() # sanitization patch (Issue #683 workaround)
+            # apply_patch() # sanitization patch (Issue #683 workaround)
 
             llm_client = self._llm_client
             if llm_client is None:
@@ -151,7 +244,9 @@ class GraphitiClient(ZepClientAdapter):
             if embedder is None:
                 embedder = self._build_default_embedder()
 
-            graphiti_tracer = create_graphiti_langfuse_tracer()
+            graphiti_tracer = create_graphiti_langfuse_tracer(
+                enable_for_request=self.enable_otel_tracing
+            )
             trace_span_prefix = "graphiti.oracle" if self.graph_driver is not None else "graphiti"
 
             if self.graph_driver is not None:
@@ -216,7 +311,7 @@ class GraphitiClient(ZepClientAdapter):
 
         api_key = os.environ.get('GRAPHITI_EMBEDDING_API_KEY')
         base_url = os.environ.get('GRAPHITI_EMBEDDING_BASE_URL')
-        embedding_model = os.environ.get('GRAPHITI_EMBEDDING_MODEL')
+        embedding_model = self.embedding_model or Config.GRAPHITI_DEFAULT_EMBEDDING_MODEL
 
         if embedding_model:
             config = OpenAIEmbedderConfig(
@@ -244,27 +339,27 @@ class GraphitiClient(ZepClientAdapter):
             "description": description,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        self._ensure_graph_constraints(graph_id)
         logger.info(f"Graph metadata recorded: graph_id={graph_id}, name={name}")
 
     def delete_graph(self, graph_id: str) -> None:
         self._ensure_initialized()
 
         async def _delete():
-            records, _, _ = await self._driver.execute_query(
-                """
-                MATCH (n {group_id: $group_id})
-                DETACH DELETE n
-                RETURN count(n) as deleted_count
-                """,
-                group_id=graph_id,
-            )
-            deleted = records[0]['deleted_count'] if records else 0
-            logger.debug(f"Deleted {deleted} nodes (group_id={graph_id})")
+            graph_ops = self._driver.graph_ops
+            if graph_ops is not None:
+                await graph_ops.clear_data(self._driver, [graph_id])
+                logger.debug("Cleared graph data via driver graph_ops (group_id=%s)", graph_id)
+            else:
+                from graphiti_core.utils.maintenance.graph_data_operations import clear_data
+
+                await clear_data(self._driver, [graph_id])
+                logger.debug("Cleared graph data via graph_data_operations.clear_data (group_id=%s)", graph_id)
 
         _run_async(_delete())
 
         self._graph_metadata.pop(graph_id, None)
-        self._ontology_cache.pop(graph_id, None)
+        self._remove_cached_ontology(graph_id)
         logger.info(f"Graph has been deleted: graph_id={graph_id}")
 
     def set_ontology(
@@ -274,19 +369,97 @@ class GraphitiClient(ZepClientAdapter):
         edges: Optional[Dict[str, Any]] = None
     ) -> None:
         for graph_id in graph_ids:
-            self._ontology_cache[graph_id] = {
-                "entities": entities or {},
-                "edges": edges or {},
-            }
+            self._ensure_graph_constraints(graph_id)
+            self._set_cached_ontology(graph_id, entities, edges)
             logger.info(
                 f"Ontology has been cached (MVP no-op): graph_id={graph_id}, "
                 f"entity_types={len(entities or {})}, edge_types={len(edges or {})}"
             )
 
+    @staticmethod
+    def _extract_source_target_pair(source_target: Any) -> tuple[str, str] | None:
+        if isinstance(source_target, dict):
+            source = str(source_target.get("source", "")).strip()
+            target = str(source_target.get("target", "")).strip()
+        else:
+            source = str(getattr(source_target, "source", "")).strip()
+            target = str(getattr(source_target, "target", "")).strip()
+        if source and target:
+            return source, target
+        return None
+
+    def _build_ontology_kwargs(self, graph_id: str) -> Dict[str, Any]:
+        ontology_entry = self._get_cached_ontology(graph_id)
+        if not isinstance(ontology_entry, dict):
+            return {}
+
+        entity_types = ontology_entry.get("entities")
+        if not isinstance(entity_types, dict):
+            entity_types = {}
+
+        edges = ontology_entry.get("edges")
+        if not isinstance(edges, dict):
+            edges = {}
+
+        edge_types: Dict[str, Any] = {}
+        edge_type_map: Dict[tuple[str, str], List[str]] = {}
+
+        for edge_name, edge_definition in edges.items():
+            normalized_edge_name = str(edge_name or "").strip()
+            if not normalized_edge_name:
+                continue
+
+            edge_class: Any = None
+            source_targets: list[Any] = []
+
+            if isinstance(edge_definition, tuple) and len(edge_definition) >= 2:
+                edge_class = edge_definition[0]
+                source_targets = list(edge_definition[1] or [])
+            elif isinstance(edge_definition, dict):
+                edge_class = edge_definition.get("edge_type") or edge_definition.get("model")
+                source_targets = list(edge_definition.get("source_targets", []) or [])
+            else:
+                edge_class = edge_definition
+
+            if edge_class is not None:
+                edge_types[normalized_edge_name] = edge_class
+
+            for source_target in source_targets:
+                pair = self._extract_source_target_pair(source_target)
+                if pair is None:
+                    continue
+                if pair not in edge_type_map:
+                    edge_type_map[pair] = []
+                if normalized_edge_name not in edge_type_map[pair]:
+                    edge_type_map[pair].append(normalized_edge_name)
+
+        ontology_kwargs: Dict[str, Any] = {}
+        if entity_types:
+            ontology_kwargs["entity_types"] = entity_types
+        if edge_types:
+            ontology_kwargs["edge_types"] = edge_types
+        if edge_type_map:
+            ontology_kwargs["edge_type_map"] = edge_type_map
+        return ontology_kwargs
+
+    @staticmethod
+    def _filter_supported_kwargs(func: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            signature = inspect.signature(func)
+        except (TypeError, ValueError):
+            return kwargs
+
+        parameters = signature.parameters
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+            return kwargs
+
+        supported_names = set(parameters.keys())
+        return {key: value for key, value in kwargs.items() if key in supported_names}
+
     # ==================== Episode operations ====================
 
     def add_episode(self, graph_id: str, data: str, episode_type: str = "text") -> str:
-        self._ensure_initialized()
+        self._ensure_graph_constraints(graph_id)
 
         from graphiti_core.nodes import EpisodeType
 
@@ -298,14 +471,17 @@ class GraphitiClient(ZepClientAdapter):
             source_type = EpisodeType.json
 
         async def _add():
-            result = await self._graphiti.add_episode(
-                name=f"episode_{graph_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                episode_body=data,
-                source=source_type,
-                source_description="mirofish_simulation",
-                reference_time=datetime.now(timezone.utc),
-                group_id=graph_id,
-            )
+            call_kwargs = {
+                "name": f"episode_{graph_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                "episode_body": data,
+                "source": source_type,
+                "source_description": f"{graph_id}_episodes",
+                "reference_time": datetime.now(timezone.utc),
+                "group_id": graph_id,
+            }
+            call_kwargs.update(self._build_ontology_kwargs(graph_id))
+            filtered_kwargs = self._filter_supported_kwargs(self._graphiti.add_episode, call_kwargs)
+            result = await self._graphiti.add_episode(**filtered_kwargs)
             return result.episode.uuid if result and result.episode else ""
 
         return _run_async(_add())
@@ -315,7 +491,7 @@ class GraphitiClient(ZepClientAdapter):
         graph_id: str,
         episodes: List[Dict[str, Any]]
     ) -> List[str]:
-        self._ensure_initialized()
+        self._ensure_graph_constraints(graph_id)
 
         from graphiti_core.nodes import EpisodeType
         from graphiti_core.utils.bulk_utils import RawEpisode
@@ -334,16 +510,19 @@ class GraphitiClient(ZepClientAdapter):
                     name=f"episode_{graph_id}_{i}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
                     content=ep.get("data", ""),
                     source=source_type,
-                    source_description="mirofish_simulation",
+                    source_description=f"{graph_id}_episodes",
                     reference_time=datetime.now(timezone.utc),
                 )
             )
 
         async def _add_bulk():
-            result = await self._graphiti.add_episode_bulk(
-                bulk_episodes=raw_episodes,
-                group_id=graph_id,
-            )
+            call_kwargs = {
+                "bulk_episodes": raw_episodes,
+                "group_id": graph_id,
+            }
+            call_kwargs.update(self._build_ontology_kwargs(graph_id))
+            filtered_kwargs = self._filter_supported_kwargs(self._graphiti.add_episode_bulk, call_kwargs)
+            result = await self._graphiti.add_episode_bulk(**filtered_kwargs)
             # Return all episode UUIDs.
             return [ep.uuid for ep in result.episodes] if result and result.episodes else []
 
@@ -359,166 +538,67 @@ class GraphitiClient(ZepClientAdapter):
         self._ensure_initialized()
 
         async def _get_nodes():
-            for label in ["Entity", "EntityNode"]:
-                records, _, _ = await self._driver.execute_query(
-                    f"""
-                    MATCH (n:{label} {{group_id: $group_id}})
-                    RETURN
-                        n.uuid AS uuid,
-                        n.name AS name,
-                        labels(n) AS labels,
-                        n.summary AS summary,
-                        properties(n) AS props,
-                        n.created_at AS created_at
-                    """,
-                    group_id=graph_id,
-                )
-                if records:
-                    return records
+            node_ops = self._driver.entity_node_ops
+            if node_ops is None:
+                logger.warning("get_all_nodes: entity_node_ops is unavailable for this driver")
+                return []
+            return await node_ops.get_by_group_ids(self._driver, [graph_id])
 
-            logger.warning(
-                f"get_all_nodes: No nodes found for group_id={graph_id}. "
-                f"Possible reasons: 1) Graph is empty 2) Graphiti schema mismatch (tried Entity, EntityNode)"
-            )
-            return []
-
-        records = _run_async(_get_nodes())
-        nodes = []
-        for record in records:
-            props = record.get("props", {})
-            attributes = {
-                k: v for k, v in props.items()
-                if k not in ["uuid", "name", "summary", "created_at", "group_id"]
-            }
-            created_at = record.get("created_at")
-            if hasattr(created_at, 'to_native'):
-                created_at = created_at.to_native().isoformat()
-            elif created_at:
-                created_at = str(created_at)
-
-            nodes.append(GraphNode(
-                uuid=record.get("uuid", ""),
-                name=record.get("name", ""),
-                labels=record.get("labels", ["Entity"]),
-                summary=record.get("summary", ""),
-                attributes=attributes,
-                created_at=created_at,
-            ))
-        return nodes
+        raw_nodes = _run_async(_get_nodes())
+        if not raw_nodes:
+            logger.debug("get_all_nodes: no nodes found for group_id=%s", graph_id)
+        return [self._graphiti_node_to_graph_node(node) for node in raw_nodes]
 
     def get_node(self, node_uuid: str) -> Optional[GraphNode]:
         self._ensure_initialized()
 
         async def _get_node():
-            records, _, _ = await self._driver.execute_query(
-                """
-                MATCH (n {uuid: $uuid})
-                RETURN
-                    n.uuid AS uuid,
-                    n.name AS name,
-                    labels(n) AS labels,
-                    n.summary AS summary,
-                    properties(n) AS props,
-                    n.created_at AS created_at
-                LIMIT 1
-                """,
-                uuid=node_uuid,
-            )
-            return records
+            node_ops = self._driver.entity_node_ops
+            if node_ops is None:
+                logger.warning("get_node: entity_node_ops is unavailable for this driver")
+                return None
+            try:
+                return await node_ops.get_by_uuid(self._driver, node_uuid)
+            except Exception as exc:
+                logger.debug("get_node lookup failed for uuid=%s: %s", node_uuid, exc)
+                return None
 
-        records = _run_async(_get_node())
-        if not records:
+        raw_node = _run_async(_get_node())
+        if raw_node is None:
             logger.debug(f"get_node: No node found for uuid={node_uuid}")
             return None
 
-        record = records[0]
-        props = record.get("props", {})
-        attributes = {
-            k: v for k, v in props.items()
-            if k not in ["uuid", "name", "summary", "created_at", "group_id"]
-        }
-        created_at = record.get("created_at")
-        if hasattr(created_at, 'to_native'):
-            created_at = created_at.to_native().isoformat()
-        elif created_at:
-            created_at = str(created_at)
-
-        return GraphNode(
-            uuid=record.get("uuid", ""),
-            name=record.get("name", ""),
-            labels=record.get("labels", ["Entity"]),
-            summary=record.get("summary", ""),
-            attributes=attributes,
-            created_at=created_at,
-        )
+        return self._graphiti_node_to_graph_node(raw_node)
 
     def get_node_edges(self, node_uuid: str) -> List[GraphEdge]:
         self._ensure_initialized()
 
         async def _get_edges():
-            # add all edges for the node
-            # use r.name if available, otherwise use type(r)
-            records, _, _ = await self._driver.execute_query(
-                """
-                MATCH (n {uuid: $uuid})-[r]-(m)
-                RETURN DISTINCT
-                    r.uuid AS uuid,
-                    COALESCE(r.name, type(r)) AS name,
-                    r.fact AS fact,
-                    startNode(r).uuid AS source_uuid,
-                    endNode(r).uuid AS target_uuid,
-                    properties(r) AS props,
-                    r.created_at AS created_at,
-                    r.valid_at AS valid_at,
-                    r.invalid_at AS invalid_at,
-                    r.expired_at AS expired_at
-                """,
-                uuid=node_uuid,
-            )
-            return records
+            edge_ops = self._driver.entity_edge_ops
+            if edge_ops is None:
+                logger.warning("get_node_edges: entity_edge_ops is unavailable for this driver")
+                return []
+            return await edge_ops.get_by_node_uuid(self._driver, node_uuid)
 
-        records = _run_async(_get_edges())
-        if not records:
+        raw_edges = _run_async(_get_edges())
+        if not raw_edges:
             logger.debug(f"get_node_edges: no edges found for node uuid={node_uuid}")
-        return [self._record_to_edge(record) for record in records]
+        return [self._graphiti_edge_to_graph_edge(edge) for edge in raw_edges]
 
     def get_all_edges(self, graph_id: str) -> List[GraphEdge]:
         self._ensure_initialized()
 
         async def _get_edges():
-            # Filter edges by node group_id and use DISTINCT to avoid duplicates.
-            # Note: edges themselves may not have group_id, so filter via connected nodes.
-            # Prefer r.name (actual relation name), fallback to type(r) (relation type).
-            for label in ["Entity", "EntityNode"]:
-                records, _, _ = await self._driver.execute_query(
-                    f"""
-                    MATCH (n:{label} {{group_id: $group_id}})-[r]-(m:{label})
-                    WHERE n.group_id = m.group_id
-                    RETURN DISTINCT
-                        r.uuid AS uuid,
-                        COALESCE(r.name, type(r)) AS name,
-                        r.fact AS fact,
-                        startNode(r).uuid AS source_uuid,
-                        endNode(r).uuid AS target_uuid,
-                        properties(r) AS props,
-                        r.created_at AS created_at,
-                        r.valid_at AS valid_at,
-                        r.invalid_at AS invalid_at,
-                        r.expired_at AS expired_at
-                    """,
-                    group_id=graph_id,
-                )
-                if records:
-                    return records
+            edge_ops = self._driver.entity_edge_ops
+            if edge_ops is None:
+                logger.warning("get_all_edges: entity_edge_ops is unavailable for this driver")
+                return []
+            return await edge_ops.get_by_group_ids(self._driver, [graph_id])
 
-            logger.warning(
-                f"get_all_edges: No edges found for group_id={graph_id}. "
-                f"Possible reasons: 1) Graph is empty 2) Graphiti schema mismatch"
-            )
-            return []
-
-        records = _run_async(_get_edges())
-        return [self._record_to_edge(record) for record in records]
+        raw_edges = _run_async(_get_edges())
+        if not raw_edges:
+            logger.debug("get_all_edges: no edges found for group_id=%s", graph_id)
+        return [self._graphiti_edge_to_graph_edge(edge) for edge in raw_edges]
 
     def _is_openai_compatible_only(self) -> bool:
         # force use cross_encoder
@@ -660,36 +740,6 @@ class GraphitiClient(ZepClientAdapter):
 
         return SearchResult(nodes=nodes, edges=edges)
 
-
-    def _record_to_edge(self, record: Dict[str, Any]) -> GraphEdge:
-        """Convert Neo4j query result to GraphEdge"""
-        props = record.get("props", {})
-        attributes = {
-            k: v for k, v in props.items()
-            if k not in ["uuid", "fact", "created_at", "valid_at", "invalid_at", "expired_at", "group_id"]
-        }
-
-        def _format_time(t):
-            if t is None:
-                return None
-            if hasattr(t, 'to_native'):
-                return t.to_native().isoformat()
-            return str(t)
-
-        return GraphEdge(
-            uuid=record.get("uuid", ""),
-            name=record.get("name", ""),
-            fact=record.get("fact", ""),
-            source_node_uuid=record.get("source_uuid", ""),
-            target_node_uuid=record.get("target_uuid", ""),
-            attributes=attributes,
-            created_at=_format_time(record.get("created_at")),
-            valid_at=_format_time(record.get("valid_at")),
-            invalid_at=_format_time(record.get("invalid_at")),
-            expired_at=_format_time(record.get("expired_at")),
-            episodes=[],  # Graphiti edges may not expose episodes.
-            fact_type=record.get("name", ""),
-        )
 
     def _graphiti_node_to_graph_node(self, node: Any) -> GraphNode:
         """Convert Graphiti node object to GraphNode"""

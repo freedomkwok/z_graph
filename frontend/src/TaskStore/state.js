@@ -15,6 +15,7 @@ const initialGraphTask = {
   message: "Waiting",
   progress: 0,
   taskId: "",
+  startedAt: "",
   nodeCount: 0,
   edgeCount: 0,
   chunkCount: 0,
@@ -34,12 +35,20 @@ const initialState = {
       neo4j: false,
       oracle: false,
     },
+    graphitiEmbeddingModelOptions: ["text-embedding-3-large"],
+    graphitiDefaultEmbeddingModel: "text-embedding-3-large",
+    graphitiTracingDefaultEnabled: true,
     latencyMs: null,
+    taskPollIntervalMs: 2000,
+    graphDataPollIntervalMs: 10000,
     message: "Not checked",
   },
   iframeVersion: 0,
   form: {
     files: [],
+    usePdfPageRange: false,
+    pdfPageFrom: 1,
+    pdfPageTo: 100,
     simulationRequirement: "",
     projectName: "New Project",
     additionalContext: "",
@@ -47,10 +56,21 @@ const initialState = {
     minimumEdges: 10,
     promptLabel: "Production",
     graphName: "",
+    graphLabel: "",
     chunkSize: 500,
     chunkOverlap: 50,
     chunkMode: "fixed",
+    overrideGraph: false,
+    enableOtelTracing: true,
+    enableOracleRuntimeOverrides: true,
+    oraclePoolMin: "",
+    oraclePoolMax: "",
+    oraclePoolIncrement: "",
+    oracleMaxCoroutines: "",
+    refreshDataWhileBuild: true,
+    refreshDataPollSeconds: 20,
     graphBackend: "zep_cloud",
+    graphitiEmbeddingModel: "text-embedding-3-large",
     useProjectNameAsGraphId: false,
     projectId: "",
   },
@@ -68,6 +88,11 @@ const initialState = {
   currentProject: null,
   ontologyTask: initialOntologyTask,
   graphTask: initialGraphTask,
+  graphResumeCandidate: null,
+  networkActivity: {
+    pendingCount: 0,
+    visible: false,
+  },
   systemLogs: [],
 };
 
@@ -221,6 +246,35 @@ function taskReducer(state, action) {
       return {
         ...state,
         graphTask: { ...state.graphTask, ...action.payload },
+      };
+    case "SET_GRAPH_RESUME_CANDIDATE":
+      return {
+        ...state,
+        graphResumeCandidate: action.payload ?? null,
+      };
+    case "NETWORK_REQUEST_STARTED":
+      return {
+        ...state,
+        networkActivity: {
+          ...state.networkActivity,
+          pendingCount: Math.max(0, Number(state.networkActivity?.pendingCount ?? 0) + 1),
+        },
+      };
+    case "NETWORK_REQUEST_FINISHED":
+      return {
+        ...state,
+        networkActivity: {
+          ...state.networkActivity,
+          pendingCount: Math.max(0, Number(state.networkActivity?.pendingCount ?? 0) - 1),
+        },
+      };
+    case "SET_NETWORK_ACTIVITY_VISIBLE":
+      return {
+        ...state,
+        networkActivity: {
+          ...state.networkActivity,
+          visible: Boolean(action.payload),
+        },
       };
     case "ADD_SYSTEM_LOG":
       return {

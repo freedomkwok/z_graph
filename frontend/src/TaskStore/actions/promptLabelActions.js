@@ -1,42 +1,92 @@
 import { getPreferredPromptLabel } from "../utils";
 
-function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField, withApiBase }) {
-  const fetchPromptLabels = async ({ syncFormLabel = true } = {}) => {
-    dispatch({
-      type: "PATCH_PROMPT_LABEL_CATALOG",
-      payload: { loading: true, error: "" },
-    });
-    try {
-      const response = await fetch(withApiBase("/api/prompt-label/list"));
-      const payload = await response.json();
-      if (!response.ok || !payload?.success) {
-        throw new Error(payload?.error ?? "Failed to list category labels");
-      }
+/** Coalesce concurrent / Strict Mode double-mount list calls into one HTTP request. */
+let promptLabelListInFlight = null;
+/** After a fast response, React 18 Strict Mode may run the startup effect again; reuse result briefly. */
+let promptLabelListLastOk = null;
+const PROMPT_LABEL_LIST_DEDUP_MS = 750;
 
-      const labels = Array.isArray(payload?.data) ? payload.data : [];
-      const parsedTotalLabels = Number(payload?.total_labels);
-      const totalLabels = Number.isFinite(parsedTotalLabels) ? parsedTotalLabels : labels.length;
-      dispatch({
-        type: "SET_PROMPT_LABEL_CATALOG",
-        payload: { loading: false, error: "", items: labels, totalLabels },
-      });
+function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField, withApiBase, trackedFetch }) {
+  const applySyncFormLabel = (labels, syncFormLabel) => {
+    if (!syncFormLabel) {
+      return;
+    }
+    const nextPromptLabel = getPreferredPromptLabel(labels, state.form.promptLabel);
+    setFormField("promptLabel", nextPromptLabel);
+  };
 
-      if (syncFormLabel) {
-        const nextPromptLabel = getPreferredPromptLabel(labels, state.form.promptLabel);
-        setFormField("promptLabel", nextPromptLabel);
-      }
+  const fetchPromptLabels = async ({ syncFormLabel = true, skipDedup = false } = {}) => {
+    if (skipDedup) {
+      promptLabelListLastOk = null;
+    }
+
+    const now = Date.now();
+    if (
+      !skipDedup &&
+      Array.isArray(promptLabelListLastOk?.labels) &&
+      now - (promptLabelListLastOk?.completedAt ?? 0) < PROMPT_LABEL_LIST_DEDUP_MS
+    ) {
+      const labels = promptLabelListLastOk.labels;
+      applySyncFormLabel(labels, syncFormLabel);
       return labels;
-    } catch (error) {
+    }
+
+    if (!skipDedup && promptLabelListInFlight) {
+      const labels = await promptLabelListInFlight;
+      applySyncFormLabel(labels, syncFormLabel);
+      return labels;
+    }
+
+    if (skipDedup && promptLabelListInFlight) {
+      await promptLabelListInFlight;
+    }
+
+    const run = (async () => {
       dispatch({
         type: "PATCH_PROMPT_LABEL_CATALOG",
-        payload: {
-          loading: false,
-          error: String(error),
-          totalLabels: state.promptLabelCatalog.totalLabels,
-        },
+        payload: { loading: true, error: "" },
       });
-      addSystemLog(`Exception in listPromptLabels: ${String(error)}`);
-      return [];
+      try {
+        const response = await trackedFetch(withApiBase("/api/prompt-label/list"), undefined, {
+          source: "api",
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload?.success) {
+          throw new Error(payload?.error ?? "Failed to list category labels");
+        }
+
+        const labels = Array.isArray(payload?.data) ? payload.data : [];
+        const parsedTotalLabels = Number(payload?.total_labels);
+        const totalLabels = Number.isFinite(parsedTotalLabels) ? parsedTotalLabels : labels.length;
+        dispatch({
+          type: "SET_PROMPT_LABEL_CATALOG",
+          payload: { loading: false, error: "", items: labels, totalLabels },
+        });
+
+        promptLabelListLastOk = { labels, completedAt: Date.now() };
+        return labels;
+      } catch (error) {
+        dispatch({
+          type: "PATCH_PROMPT_LABEL_CATALOG",
+          payload: {
+            loading: false,
+            error: String(error),
+            totalLabels: state.promptLabelCatalog.totalLabels,
+          },
+        });
+        addSystemLog(`Exception in listPromptLabels: ${String(error)}`);
+        return [];
+      }
+    })();
+
+    promptLabelListInFlight = run;
+
+    try {
+      const labels = await run;
+      applySyncFormLabel(labels, syncFormLabel);
+      return labels;
+    } finally {
+      promptLabelListInFlight = null;
     }
   };
 
@@ -46,17 +96,21 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
       throw new Error("Label name is required");
     }
 
-    const response = await fetch(withApiBase("/api/prompt-label"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: normalizedName }),
-    });
+    const response = await trackedFetch(
+      withApiBase("/api/prompt-label"),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: normalizedName }),
+      },
+      { source: "api" },
+    );
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
       throw new Error(payload?.error ?? "Failed to create category label");
     }
 
-    await fetchPromptLabels({ syncFormLabel: false });
+    await fetchPromptLabels({ syncFormLabel: false, skipDedup: true });
     addSystemLog(`Category label saved: ${payload?.data?.name ?? normalizedName}`);
     return payload?.data;
   };
@@ -67,15 +121,19 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
       throw new Error("Label name is required");
     }
 
-    const response = await fetch(withApiBase(`/api/prompt-label/${encodeURIComponent(normalizedName)}`), {
-      method: "DELETE",
-    });
+    const response = await trackedFetch(
+      withApiBase(`/api/prompt-label/${encodeURIComponent(normalizedName)}`),
+      {
+        method: "DELETE",
+      },
+      { source: "api" },
+    );
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
       throw new Error(payload?.error ?? "Failed to delete category label");
     }
 
-    const labels = await fetchPromptLabels({ syncFormLabel: false });
+    const labels = await fetchPromptLabels({ syncFormLabel: false, skipDedup: true });
     const nextPromptLabel = getPreferredPromptLabel(labels, state.form.promptLabel);
     if (nextPromptLabel !== state.form.promptLabel) {
       setFormField("promptLabel", nextPromptLabel);
@@ -90,16 +148,17 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
       throw new Error("Label name is required");
     }
 
-    const response = await fetch(
+    const response = await trackedFetch(
       withApiBase(`/api/prompt-label/${encodeURIComponent(normalizedName)}/sync-from-langfuse`),
       { method: "POST" },
+      { source: "api" },
     );
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
       throw new Error(payload?.error ?? "Failed to sync category label defaults");
     }
 
-    await fetchPromptLabels({ syncFormLabel: false });
+    await fetchPromptLabels({ syncFormLabel: false, skipDedup: true });
     const downloadedFiles = Number(payload?.data?.downloaded_files ?? 0);
     addSystemLog(
       `Category label synced from default: ${normalizedName} (${downloadedFiles} file${downloadedFiles === 1 ? "" : "s"})`,
@@ -109,7 +168,13 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
 
   const generatePromptLabelTypeListsFromLlm = async (
     name,
-    { projectId, entityEdgeGeneratorPromptContent } = {},
+    {
+      projectId,
+      entityEdgeGeneratorPromptContent,
+      usePdfPageRange = false,
+      pdfPageFrom = 1,
+      pdfPageTo = 100,
+    } = {},
   ) => {
     const normalizedName = String(name ?? "").trim();
     if (!normalizedName) {
@@ -119,20 +184,27 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     if (!normalizedProjectId) {
       throw new Error("project_id is required");
     }
+    const normalizedPdfPageFrom = Math.max(1, Number.parseInt(String(pdfPageFrom ?? ""), 10) || 1);
+    const normalizedPdfPageTo = Math.max(1, Number.parseInt(String(pdfPageTo ?? ""), 10) || 100);
+    const resolvedPdfPageFrom = Math.min(normalizedPdfPageFrom, normalizedPdfPageTo);
+    const resolvedPdfPageTo = Math.max(normalizedPdfPageFrom, normalizedPdfPageTo);
 
-    const response = await fetch(
+    const response = await trackedFetch(
       withApiBase(`/api/prompt-label/${encodeURIComponent(normalizedName)}/generate-from-llm`),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           project_id: normalizedProjectId,
+          pdf_page_from: Boolean(usePdfPageRange) ? resolvedPdfPageFrom : undefined,
+          pdf_page_to: Boolean(usePdfPageRange) ? resolvedPdfPageTo : undefined,
           entity_edge_generator_prompt_content:
             typeof entityEdgeGeneratorPromptContent === "string"
               ? entityEdgeGeneratorPromptContent
               : undefined,
         }),
       },
+      { source: "api" },
     );
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
@@ -151,6 +223,9 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     promptLabel = "",
     graphBackend = "",
     projectId = "",
+    usePdfPageRange = false,
+    pdfPageFrom = 1,
+    pdfPageTo = 100,
     files = [],
   } = {}) => {
     const formData = new FormData();
@@ -158,21 +233,33 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     const normalizedPromptLabel = String(promptLabel ?? "").trim();
     const normalizedGraphBackend = String(graphBackend ?? "").trim();
     const normalizedProjectId = String(projectId ?? "").trim();
+    const normalizedPdfPageFrom = Math.max(1, Number.parseInt(String(pdfPageFrom ?? ""), 10) || 1);
+    const normalizedPdfPageTo = Math.max(1, Number.parseInt(String(pdfPageTo ?? ""), 10) || 100);
+    const resolvedPdfPageFrom = Math.min(normalizedPdfPageFrom, normalizedPdfPageTo);
+    const resolvedPdfPageTo = Math.max(normalizedPdfPageFrom, normalizedPdfPageTo);
 
     if (normalizedProjectName) formData.append("project_name", normalizedProjectName);
     if (normalizedPromptLabel) formData.append("prompt_label", normalizedPromptLabel);
     if (normalizedGraphBackend) formData.append("graph_backend", normalizedGraphBackend);
     if (normalizedProjectId) formData.append("project_id", normalizedProjectId);
+    if (Boolean(usePdfPageRange)) {
+      formData.append("pdf_page_from", String(resolvedPdfPageFrom));
+      formData.append("pdf_page_to", String(resolvedPdfPageTo));
+    }
     for (const file of Array.isArray(files) ? files : []) {
       if (file) {
         formData.append("files", file);
       }
     }
 
-    const response = await fetch(withApiBase("/api/project/draft"), {
-      method: "POST",
-      body: formData,
-    });
+    const response = await trackedFetch(
+      withApiBase("/api/project/draft"),
+      {
+        method: "POST",
+        body: formData,
+      },
+      { source: "api" },
+    );
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
       throw new Error(payload?.error ?? "Failed to prepare draft project");
@@ -187,14 +274,24 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     return payload?.data;
   };
 
-  const getPromptLabelTypeLists = async (name) => {
+  const getPromptLabelTypeLists = async (name, { projectId } = {}) => {
     const normalizedName = String(name ?? "").trim();
+    const normalizedProjectId = String(projectId ?? "").trim();
     if (!normalizedName) {
       throw new Error("Label name is required");
     }
 
-    const response = await fetch(
-      withApiBase(`/api/prompt-label/${encodeURIComponent(normalizedName)}/types`),
+    const params = new URLSearchParams();
+    if (normalizedProjectId) {
+      params.set("project_id", normalizedProjectId);
+    }
+    const query = params.toString();
+    const response = await trackedFetch(
+      withApiBase(
+        `/api/prompt-label/${encodeURIComponent(normalizedName)}/types${query ? `?${query}` : ""}`,
+      ),
+      undefined,
+      { source: "api" },
     );
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
@@ -203,9 +300,10 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     return payload?.data;
   };
 
-  const getPromptLabelPromptTemplate = async (name, promptKey) => {
+  const getPromptLabelPromptTemplate = async (name, promptKey, { projectId } = {}) => {
     const normalizedName = String(name ?? "").trim();
     const normalizedPromptKey = String(promptKey ?? "").trim();
+    const normalizedProjectId = String(projectId ?? "").trim();
     if (!normalizedName) {
       throw new Error("Label name is required");
     }
@@ -213,10 +311,17 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
       throw new Error("prompt_key is required");
     }
 
-    const response = await fetch(
+    const params = new URLSearchParams();
+    if (normalizedProjectId) {
+      params.set("project_id", normalizedProjectId);
+    }
+    const query = params.toString();
+    const response = await trackedFetch(
       withApiBase(
-        `/api/prompt-label/${encodeURIComponent(normalizedName)}/prompt-template/${encodeURIComponent(normalizedPromptKey)}`,
+        `/api/prompt-label/${encodeURIComponent(normalizedName)}/prompt-template/${encodeURIComponent(normalizedPromptKey)}${query ? `?${query}` : ""}`,
       ),
+      undefined,
+      { source: "api" },
     );
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
@@ -225,9 +330,10 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     return payload?.data;
   };
 
-  const updatePromptLabelPromptTemplate = async (name, promptKey, content) => {
+  const updatePromptLabelPromptTemplate = async (name, promptKey, content, { projectId } = {}) => {
     const normalizedName = String(name ?? "").trim();
     const normalizedPromptKey = String(promptKey ?? "").trim();
+    const normalizedProjectId = String(projectId ?? "").trim();
     if (!normalizedName) {
       throw new Error("Label name is required");
     }
@@ -235,7 +341,7 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
       throw new Error("prompt_key is required");
     }
 
-    const response = await fetch(
+    const response = await trackedFetch(
       withApiBase(
         `/api/prompt-label/${encodeURIComponent(normalizedName)}/prompt-template/${encodeURIComponent(normalizedPromptKey)}`,
       ),
@@ -244,8 +350,10 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           content: String(content ?? ""),
+          project_id: normalizedProjectId || undefined,
         }),
       },
+      { source: "api" },
     );
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
@@ -255,9 +363,10 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     return payload?.data;
   };
 
-  const syncPromptLabelPromptTemplateFromDefault = async (name, promptKey) => {
+  const syncPromptLabelPromptTemplateFromDefault = async (name, promptKey, { projectId } = {}) => {
     const normalizedName = String(name ?? "").trim();
     const normalizedPromptKey = String(promptKey ?? "").trim();
+    const normalizedProjectId = String(projectId ?? "").trim();
     if (!normalizedName) {
       throw new Error("Label name is required");
     }
@@ -265,11 +374,17 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
       throw new Error("prompt_key is required");
     }
 
-    const response = await fetch(
+    const params = new URLSearchParams();
+    if (normalizedProjectId) {
+      params.set("project_id", normalizedProjectId);
+    }
+    const query = params.toString();
+    const response = await trackedFetch(
       withApiBase(
-        `/api/prompt-label/${encodeURIComponent(normalizedName)}/prompt-template/${encodeURIComponent(normalizedPromptKey)}/sync-from-default`,
+        `/api/prompt-label/${encodeURIComponent(normalizedName)}/prompt-template/${encodeURIComponent(normalizedPromptKey)}/sync-from-default${query ? `?${query}` : ""}`,
       ),
-      { method: "POST" },
+      undefined,
+      { source: "api" },
     );
     const payload = await response.json();
     if (!response.ok || !payload?.success) {
@@ -279,13 +394,14 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
     return payload?.data;
   };
 
-  const updatePromptLabelTypeLists = async (name, typeLists) => {
+  const updatePromptLabelTypeLists = async (name, typeLists, { projectId } = {}) => {
     const normalizedName = String(name ?? "").trim();
+    const normalizedProjectId = String(projectId ?? "").trim();
     if (!normalizedName) {
       throw new Error("Label name is required");
     }
 
-    const response = await fetch(
+    const response = await trackedFetch(
       withApiBase(`/api/prompt-label/${encodeURIComponent(normalizedName)}/types`),
       {
         method: "PATCH",
@@ -303,8 +419,10 @@ function createPromptLabelActions({ state, dispatch, addSystemLog, setFormField,
           relationship_exception: Array.isArray(typeLists?.relationship_exception)
             ? typeLists.relationship_exception
             : [],
+          project_id: normalizedProjectId || undefined,
         }),
       },
+      { source: "api" },
     );
     const payload = await response.json();
     if (!response.ok || !payload?.success) {

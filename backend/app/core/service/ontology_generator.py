@@ -1,4 +1,24 @@
 """
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 Ontology generation service.
 API 1: analyze text and emit entity/relation type definitions.
 """
@@ -114,8 +134,8 @@ class OntologyGenerator:
         llm_response = self.llm.generate(
             LLMRequest(
                 messages=messages,
-                temperature=0.3,
-                max_tokens=12096,
+                temperature=0.5,
+                max_tokens=Config.MAX_TEXT_LENGTH_FOR_LLM,
                 response_format={"type": "json_object"},
                 operation="Ontology_Creation",
                 metadata={
@@ -143,8 +163,8 @@ class OntologyGenerator:
 
         return result
 
-    # Max characters sent to the LLM (~50k Chinese chars)
-    MAX_TEXT_LENGTH_FOR_LLM = 50000
+    # Max characters sent to the LLM.
+    MAX_TEXT_LENGTH_FOR_LLM = Config.MAX_TEXT_LENGTH_FOR_LLM
 
     def _build_user_message(
         self,
@@ -164,7 +184,7 @@ class OntologyGenerator:
 
         # Truncate if over limit (LLM input only; graph build uses full text elsewhere)
         if len(combined_text) > self.MAX_TEXT_LENGTH_FOR_LLM:
-            combined_text = combined_text[: self.MAX_TEXT_LENGTH_FOR_LLM]
+            combined_text = combined_text[: int(self.MAX_TEXT_LENGTH_FOR_LLM * 0.95)]
             combined_text += (
                 f"\n\n...(Total length: {original_length} chars; "
                 f"only first {self.MAX_TEXT_LENGTH_FOR_LLM} chars included for ontology analysis)..."

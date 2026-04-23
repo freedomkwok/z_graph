@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useReducer, useRef } from "react";
+import { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 
 import { withApiBase } from "./constants";
 import { createGraphActions } from "./actions/graphActions";
@@ -12,17 +12,52 @@ import { normalizeProjectId } from "./utils";
 
 const TaskStoreContext = createContext(null);
 const MAX_TASK_POLL_ERROR_RETRIES = 3;
+const DEFAULT_TASK_POLL_INTERVAL_MS = 2000;
+const MIN_TASK_POLL_INTERVAL_MS = 500;
+const NETWORK_POPUP_SHOW_DELAY_MS = 180;
+const NETWORK_POPUP_MIN_VISIBLE_MS = 320;
+
+function normalizeMultilineMessage(value) {
+  return String(value ?? "")
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t");
+}
 
 export function TaskStoreProvider({ children }) {
   const [state, dispatch] = useReducer(taskReducer, initialState);
+  const taskPollIntervalMs = Math.max(
+    MIN_TASK_POLL_INTERVAL_MS,
+    Number(state.backendHealth?.taskPollIntervalMs ?? DEFAULT_TASK_POLL_INTERVAL_MS) ||
+      DEFAULT_TASK_POLL_INTERVAL_MS,
+  );
   const lastOntologyTaskMessageRef = useRef("");
   const lastGraphTaskMessageRef = useRef("");
   const seenOntologyLatencyEventIdsRef = useRef(new Set());
   const seenGraphLatencyEventIdsRef = useRef(new Set());
+  const seenGraphResumeLogTaskIdsRef = useRef(new Set());
+  const networkPopupShowTimerRef = useRef(null);
+  const networkPopupHideTimerRef = useRef(null);
+  const networkPopupVisibleSinceRef = useRef(0);
+  const storeStateRef = useRef(state);
+  useEffect(() => {
+    storeStateRef.current = state;
+  }, [state]);
+
+  const reportLiveGraphBuildCounts = useCallback((nodeCount, edgeCount) => {
+    if (storeStateRef.current.graphTask.status !== "running") return;
+    dispatch({
+      type: "PATCH_GRAPH_TASK",
+      payload: {
+        nodeCount: Number(nodeCount) || 0,
+        edgeCount: Number(edgeCount) || 0,
+      },
+    });
+  }, []);
 
   const addSystemLog = (message) => {
     if (!message) return;
-    dispatch({ type: "ADD_SYSTEM_LOG", payload: message });
+    dispatch({ type: "ADD_SYSTEM_LOG", payload: normalizeMultilineMessage(message) });
   };
 
   const appendTaskLatencyLogs = (task, seenEventsRef, stepLabel) => {
@@ -68,12 +103,30 @@ export function TaskStoreProvider({ children }) {
     dispatch({ type: "SET_FORM_FIELDS", payload: fields });
   };
 
+  const trackedFetch = useCallback(async (input, init = undefined, options = {}) => {
+    const track = options?.track !== false;
+    const source = String(options?.source ?? "api").trim().toLowerCase();
+    const shouldTrack =
+      track && source !== "health" && source !== "task_polling" && source !== "graph_data_polling";
+    if (shouldTrack) {
+      dispatch({ type: "NETWORK_REQUEST_STARTED" });
+    }
+    try {
+      return await fetch(input, init);
+    } finally {
+      if (shouldTrack) {
+        dispatch({ type: "NETWORK_REQUEST_FINISHED" });
+      }
+    }
+  }, []);
+
   const promptLabelActions = createPromptLabelActions({
     state,
     dispatch,
     addSystemLog,
     setFormField,
     withApiBase,
+    trackedFetch,
   });
 
   const projectActions = createProjectActions({
@@ -83,6 +136,7 @@ export function TaskStoreProvider({ children }) {
     setFormField,
     setFormFields,
     withApiBase,
+    trackedFetch,
     lastOntologyTaskMessageRef,
     lastGraphTaskMessageRef,
     seenOntologyLatencyEventIdsRef,
@@ -93,6 +147,7 @@ export function TaskStoreProvider({ children }) {
     dispatch,
     addSystemLog,
     withApiBase,
+    trackedFetch,
   });
 
   const ontologyActions = createOntologyActions({
@@ -100,6 +155,7 @@ export function TaskStoreProvider({ children }) {
     dispatch,
     addSystemLog,
     withApiBase,
+    trackedFetch,
     seenOntologyLatencyEventIdsRef,
     lastOntologyTaskMessageRef,
   });
@@ -109,6 +165,7 @@ export function TaskStoreProvider({ children }) {
     dispatch,
     addSystemLog,
     withApiBase,
+    trackedFetch,
     seenGraphLatencyEventIdsRef,
     lastGraphTaskMessageRef,
     fetchProjects: projectActions.fetchProjects,
@@ -125,6 +182,61 @@ export function TaskStoreProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    const pendingCount = Math.max(0, Number(state.networkActivity?.pendingCount ?? 0));
+    const visible = Boolean(state.networkActivity?.visible);
+
+    if (pendingCount > 0) {
+      if (!visible && !networkPopupShowTimerRef.current) {
+        networkPopupShowTimerRef.current = setTimeout(() => {
+          networkPopupShowTimerRef.current = null;
+          if (Math.max(0, Number(storeStateRef.current.networkActivity?.pendingCount ?? 0)) > 0) {
+            networkPopupVisibleSinceRef.current = Date.now();
+            dispatch({ type: "SET_NETWORK_ACTIVITY_VISIBLE", payload: true });
+          }
+        }, NETWORK_POPUP_SHOW_DELAY_MS);
+      }
+      if (networkPopupHideTimerRef.current) {
+        clearTimeout(networkPopupHideTimerRef.current);
+        networkPopupHideTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (networkPopupShowTimerRef.current) {
+      clearTimeout(networkPopupShowTimerRef.current);
+      networkPopupShowTimerRef.current = null;
+    }
+    if (!visible) {
+      return;
+    }
+    const elapsedVisible = Date.now() - Number(networkPopupVisibleSinceRef.current || 0);
+    const remainingVisible = Math.max(0, NETWORK_POPUP_MIN_VISIBLE_MS - elapsedVisible);
+    if (networkPopupHideTimerRef.current) {
+      clearTimeout(networkPopupHideTimerRef.current);
+      networkPopupHideTimerRef.current = null;
+    }
+    networkPopupHideTimerRef.current = setTimeout(() => {
+      networkPopupHideTimerRef.current = null;
+      if (Math.max(0, Number(storeStateRef.current.networkActivity?.pendingCount ?? 0)) === 0) {
+        dispatch({ type: "SET_NETWORK_ACTIVITY_VISIBLE", payload: false });
+      }
+    }, remainingVisible);
+  }, [state.networkActivity?.pendingCount, state.networkActivity?.visible]);
+
+  useEffect(() => {
+    return () => {
+      if (networkPopupShowTimerRef.current) {
+        clearTimeout(networkPopupShowTimerRef.current);
+        networkPopupShowTimerRef.current = null;
+      }
+      if (networkPopupHideTimerRef.current) {
+        clearTimeout(networkPopupHideTimerRef.current);
+        networkPopupHideTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!state.ontologyTask.taskId) return undefined;
 
     let cancelled = false;
@@ -134,7 +246,9 @@ export function TaskStoreProvider({ children }) {
 
     const poll = async () => {
       try {
-        const response = await fetch(withApiBase(`/api/task/${taskId}`));
+        const response = await trackedFetch(withApiBase(`/api/task/${taskId}`), undefined, {
+          source: "task_polling",
+        });
         const payload = await response.json();
         if (!response.ok || !payload?.success) {
           throw new Error(payload?.error ?? "Ontology task polling failed");
@@ -145,9 +259,12 @@ export function TaskStoreProvider({ children }) {
         ontologyPollErrorCount = 0;
         appendTaskLatencyLogs(task, seenOntologyLatencyEventIdsRef, "Step A");
 
-        if (task.message && task.message !== lastOntologyTaskMessageRef.current) {
-          lastOntologyTaskMessageRef.current = task.message;
-          addSystemLog(task.message);
+        const taskMessage = normalizeMultilineMessage(task.message);
+        const taskError = normalizeMultilineMessage(task.error);
+
+        if (taskMessage && taskMessage !== lastOntologyTaskMessageRef.current) {
+          lastOntologyTaskMessageRef.current = taskMessage;
+          addSystemLog(taskMessage);
         }
 
         const progressProjectId = normalizeProjectId(task?.progress_detail?.project_id ?? "");
@@ -172,7 +289,7 @@ export function TaskStoreProvider({ children }) {
               ...initialOntologyTask,
               status: "success",
               message:
-                task.message ??
+                taskMessage ??
                 (nextProjectId ? `Ontology generated for ${nextProjectId}` : "Ontology generated"),
               progress: 100,
               startedAt: "",
@@ -214,13 +331,28 @@ export function TaskStoreProvider({ children }) {
             type: "PATCH_ONTOLOGY_TASK",
             payload: {
               status: "error",
-              message: task.error ?? task.message ?? "Ontology generation failed",
+              message: taskError || taskMessage || "Ontology generation failed",
               taskId: "",
               progress: 100,
               startedAt: "",
             },
           });
-          addSystemLog(`Ontology generation failed: ${task.error ?? "Unknown error"}`);
+          addSystemLog(`Ontology generation failed:\n${taskError || "Unknown error"}`);
+          return;
+        }
+
+        if (task.status === "cancelled") {
+          dispatch({
+            type: "PATCH_ONTOLOGY_TASK",
+            payload: {
+              status: "idle",
+              message: taskMessage || "Ontology generation cancelled",
+              taskId: "",
+              progress: 0,
+              startedAt: "",
+            },
+          });
+          addSystemLog(taskMessage || "Ontology generation cancelled.");
           return;
         }
 
@@ -228,7 +360,7 @@ export function TaskStoreProvider({ children }) {
           type: "PATCH_ONTOLOGY_TASK",
           payload: {
             status: "running",
-            message: task.message ?? "Generating ontology...",
+            message: taskMessage || "Generating ontology...",
             progress: task.progress ?? 0,
             startedAt: String(task?.created_at ?? "").trim(),
           },
@@ -236,7 +368,7 @@ export function TaskStoreProvider({ children }) {
       } catch (error) {
         if (cancelled) return;
         ontologyPollErrorCount += 1;
-        const errorText = String(error);
+        const errorText = normalizeMultilineMessage(error);
         if (ontologyPollErrorCount < MAX_TASK_POLL_ERROR_RETRIES) {
           addSystemLog(
             `Polling ontology task failed (${ontologyPollErrorCount}/${MAX_TASK_POLL_ERROR_RETRIES}), retrying: ${errorText}`,
@@ -259,12 +391,12 @@ export function TaskStoreProvider({ children }) {
     };
 
     poll();
-    const timer = setInterval(poll, 2000);
+    const timer = setInterval(poll, taskPollIntervalMs);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [state.ontologyTask.taskId]);
+  }, [state.ontologyTask.taskId, taskPollIntervalMs, trackedFetch]);
 
   useEffect(() => {
     if (!state.graphTask.taskId) return undefined;
@@ -276,7 +408,9 @@ export function TaskStoreProvider({ children }) {
 
     const poll = async () => {
       try {
-        const response = await fetch(withApiBase(`/api/task/${taskId}`));
+        const response = await trackedFetch(withApiBase(`/api/task/${taskId}`), undefined, {
+          source: "task_polling",
+        });
         const payload = await response.json();
         if (!response.ok || !payload?.success) {
           throw new Error(payload?.error ?? "Task polling failed");
@@ -286,9 +420,64 @@ export function TaskStoreProvider({ children }) {
         if (cancelled) return;
         graphPollErrorCount = 0;
         appendTaskLatencyLogs(task, seenGraphLatencyEventIdsRef, "Step B");
-        if (task.message && task.message !== lastGraphTaskMessageRef.current) {
-          lastGraphTaskMessageRef.current = task.message;
-          addSystemLog(task.message);
+        const pd =
+          task?.progress_detail && typeof task.progress_detail === "object"
+            ? task.progress_detail
+            : {};
+        const resumeState = String(pd.resume_state ?? "").trim().toLowerCase();
+        if (
+          resumeState === "resuming" &&
+          !seenGraphResumeLogTaskIdsRef.current.has(taskId)
+        ) {
+          seenGraphResumeLogTaskIdsRef.current.add(taskId);
+          const matchedPrev = String(pd.matched_task_id ?? "").trim() || "unknown";
+          const totalBatches =
+            pd.total_batches !== undefined && pd.total_batches !== null
+              ? String(pd.total_batches)
+              : "?";
+          const lastDone = pd.last_completed_batch_index;
+          const startBatch =
+            typeof lastDone === "number" && Number.isFinite(lastDone)
+              ? String(lastDone + 1)
+              : "?";
+          addSystemLog(
+            `[Step B] Resuming graph build from previous task_id=${matchedPrev}; starting at batch ${startBatch}/${totalBatches}.`,
+          );
+        }
+        const taskMessage = normalizeMultilineMessage(task.message);
+        const taskError = normalizeMultilineMessage(task.error);
+
+        const liveGraphId = String(pd.zep_graph_id ?? pd.graph_id ?? "").trim();
+        const liveWorkspaceId = String(pd.project_workspace_id ?? "").trim();
+        const liveAddress = String(pd.zep_graph_address ?? "").trim();
+        const liveBackend = String(pd.graph_backend ?? "").trim();
+        const liveEmbeddingModel = String(pd.graphiti_embedding_model ?? "").trim();
+        if (liveGraphId && storeStateRef.current.currentProject) {
+          const patch = {
+            zep_graph_id: liveGraphId,
+            graph_id: liveGraphId,
+            ...(liveWorkspaceId ? { project_workspace_id: liveWorkspaceId } : {}),
+            ...(liveAddress ? { zep_graph_address: liveAddress } : {}),
+            ...(liveBackend ? { graph_backend: liveBackend } : {}),
+            ...(liveEmbeddingModel ? { graphiti_embedding_model: liveEmbeddingModel } : {}),
+          };
+          const cur = storeStateRef.current.currentProject;
+          const needsPatch =
+            String(cur.zep_graph_id ?? cur.graph_id ?? "").trim() !== liveGraphId ||
+            (liveWorkspaceId &&
+              String(cur.project_workspace_id ?? "").trim() !== liveWorkspaceId) ||
+            (liveAddress && String(cur.zep_graph_address ?? "").trim() !== liveAddress) ||
+            (liveBackend && String(cur.graph_backend ?? "").trim() !== liveBackend) ||
+            (liveEmbeddingModel &&
+              String(cur.graphiti_embedding_model ?? "").trim() !== liveEmbeddingModel);
+          if (needsPatch) {
+            dispatch({ type: "PATCH_CURRENT_PROJECT", payload: patch });
+          }
+        }
+
+        if (taskMessage && taskMessage !== lastGraphTaskMessageRef.current) {
+          lastGraphTaskMessageRef.current = taskMessage;
+          addSystemLog(taskMessage);
         }
 
         if (task.status === "completed") {
@@ -297,7 +486,7 @@ export function TaskStoreProvider({ children }) {
             type: "PATCH_GRAPH_TASK",
             payload: {
               status: "success",
-              message: task.message ?? "Graph build completed",
+              message: taskMessage || "Graph build completed",
               progress: 100,
               taskId: "",
               nodeCount: task.result?.node_count ?? 0,
@@ -312,6 +501,10 @@ export function TaskStoreProvider({ children }) {
                 graph_id: completedGraphId,
                 zep_graph_id: completedGraphId,
                 graph_backend: task.result?.graph_backend ?? state.currentProject?.graph_backend ?? "",
+                graphiti_embedding_model:
+                  task.result?.graphiti_embedding_model ??
+                  state.currentProject?.graphiti_embedding_model ??
+                  "",
                 project_workspace_id: task.result?.project_workspace_id ?? "",
                 zep_graph_address: task.result?.zep_graph_address ?? "",
                 status: "graph_completed",
@@ -328,12 +521,73 @@ export function TaskStoreProvider({ children }) {
             type: "PATCH_GRAPH_TASK",
             payload: {
               status: "error",
-              message: task.error ?? task.message ?? "Graph build failed",
+              message: taskError || taskMessage || "Graph build failed",
               taskId: "",
+              startedAt: "",
             },
           });
-          addSystemLog(`Graph build failed: ${task.error ?? "Unknown error"}`);
+          addSystemLog(`Graph build failed:\n${taskError || "Unknown error"}`);
           projectActions.fetchProjects(state.form.projectId, false);
+          dispatch({
+            type: "SET_GRAPH_RESUME_CANDIDATE",
+            payload: {
+              taskId: String(task?.task_id ?? taskId ?? "").trim(),
+              status: "failed",
+              totalBatches:
+                typeof pd.total_batches === "number" && Number.isFinite(pd.total_batches)
+                  ? pd.total_batches
+                  : null,
+              lastCompletedBatchIndex:
+                typeof pd.last_completed_batch_index === "number" &&
+                Number.isFinite(pd.last_completed_batch_index)
+                  ? pd.last_completed_batch_index
+                  : -1,
+              batchSize:
+                typeof pd.batch_size === "number" && Number.isFinite(pd.batch_size)
+                  ? pd.batch_size
+                  : null,
+              resumeState: String(pd.resume_state ?? "").trim().toLowerCase() || "failed",
+              updatedAt: String(task?.updated_at ?? "").trim(),
+            },
+          });
+          return;
+        }
+
+        if (task.status === "cancelled") {
+          dispatch({
+            type: "PATCH_GRAPH_TASK",
+            payload: {
+              status: "idle",
+              message: taskMessage || "Graph build cancelled",
+              taskId: "",
+              startedAt: "",
+              progress: 0,
+            },
+          });
+          addSystemLog(taskMessage || "Graph build cancelled.");
+          projectActions.fetchProjects(state.form.projectId, false);
+          dispatch({
+            type: "SET_GRAPH_RESUME_CANDIDATE",
+            payload: {
+              taskId: String(task?.task_id ?? taskId ?? "").trim(),
+              status: "cancelled",
+              totalBatches:
+                typeof pd.total_batches === "number" && Number.isFinite(pd.total_batches)
+                  ? pd.total_batches
+                  : null,
+              lastCompletedBatchIndex:
+                typeof pd.last_completed_batch_index === "number" &&
+                Number.isFinite(pd.last_completed_batch_index)
+                  ? pd.last_completed_batch_index
+                  : -1,
+              batchSize:
+                typeof pd.batch_size === "number" && Number.isFinite(pd.batch_size)
+                  ? pd.batch_size
+                  : null,
+              resumeState: String(pd.resume_state ?? "").trim().toLowerCase() || "cancelled",
+              updatedAt: String(task?.updated_at ?? "").trim(),
+            },
+          });
           return;
         }
 
@@ -341,14 +595,15 @@ export function TaskStoreProvider({ children }) {
           type: "PATCH_GRAPH_TASK",
           payload: {
             status: "running",
-            message: task.message ?? "Building graph...",
+            message: taskMessage || "Building graph...",
             progress: task.progress ?? 0,
+            startedAt: String(task?.created_at ?? "").trim(),
           },
         });
       } catch (error) {
         if (cancelled) return;
         graphPollErrorCount += 1;
-        const errorText = String(error);
+        const errorText = normalizeMultilineMessage(error);
         if (graphPollErrorCount < MAX_TASK_POLL_ERROR_RETRIES) {
           addSystemLog(
             `Polling graph task failed (${graphPollErrorCount}/${MAX_TASK_POLL_ERROR_RETRIES}), retrying: ${errorText}`,
@@ -364,18 +619,19 @@ export function TaskStoreProvider({ children }) {
             status: "error",
             message: errorText,
             taskId: "",
+            startedAt: "",
           },
         });
       }
     };
 
     poll();
-    const timer = setInterval(poll, 2000);
+    const timer = setInterval(poll, taskPollIntervalMs);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [state.graphTask.taskId]);
+  }, [state.graphTask.taskId, taskPollIntervalMs, trackedFetch]);
 
   const value = {
     state,
@@ -400,12 +656,19 @@ export function TaskStoreProvider({ children }) {
     fetchProjects: projectActions.fetchProjects,
     refreshProjects: projectActions.refreshProjects,
     updateProjectName: projectActions.updateProjectName,
+    updateProjectRefreshDataWhileBuild: projectActions.updateProjectRefreshDataWhileBuild,
     updateProjectOntologyTypes: projectActions.updateProjectOntologyTypes,
+    fetchProjectOntologyVersions: projectActions.fetchProjectOntologyVersions,
+    mergeProjectOntology: projectActions.mergeProjectOntology,
     deleteProject: projectActions.deleteProject,
     checkBackendHealth: healthActions.checkBackendHealth,
     runOntologyGenerate: ontologyActions.runOntologyGenerate,
+    cancelOntologyTask: ontologyActions.cancelOntologyTask,
     runGraphBuild: graphActions.runGraphBuild,
+    cancelGraphBuild: graphActions.cancelGraphBuild,
+    reportLiveGraphBuildCounts,
     addSystemLog,
+    trackedFetch,
   };
 
   return <TaskStoreContext.Provider value={value}>{children}</TaskStoreContext.Provider>;

@@ -1,15 +1,38 @@
 """
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 Chunking helpers for graph build ingestion.
 
 Modes:
 - fixed: deterministic char/sentence-aware split
 - semantic: LLM-guided boundary selection per block
 - hybrid: fixed first, LLM split only for complex blocks
+- llama_index: LlamaIndex semantic splitter with embedding model
 """
 
 from __future__ import annotations
 
 import re
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any
 
 from app.core.config import Config
@@ -20,13 +43,20 @@ from app.core.utils.text_processor import split_text_into_chunks
 CHUNK_MODE_FIXED = "fixed"
 CHUNK_MODE_SEMANTIC = "semantic"
 CHUNK_MODE_HYBRID = "hybrid"
-SUPPORTED_CHUNK_MODES = {CHUNK_MODE_FIXED, CHUNK_MODE_SEMANTIC, CHUNK_MODE_HYBRID}
+CHUNK_MODE_LLAMA_INDEX = "llama_index"
+SUPPORTED_CHUNK_MODES = {
+    CHUNK_MODE_FIXED,
+    CHUNK_MODE_SEMANTIC,
+    CHUNK_MODE_HYBRID,
+    CHUNK_MODE_LLAMA_INDEX,
+}
 
 _PARAGRAPH_SPLIT_PATTERN = re.compile(r"\n{2,}")
 _MIN_CHUNK_SIZE = 80
 _MAX_BLOCK_SIZE_MULTIPLIER = 4
 _MIN_BLOCK_SIZE = 2000
 _MAX_BLOCK_SIZE = 12000
+_LLAMA_INDEX_INSTRUMENTED = False
 
 
 def normalize_chunk_mode(value: Any) -> str:
@@ -34,6 +64,102 @@ def normalize_chunk_mode(value: Any) -> str:
     if normalized in SUPPORTED_CHUNK_MODES:
         return normalized
     return CHUNK_MODE_FIXED
+
+
+@dataclass
+class ChunkingContext:
+    text: str
+    chunk_size: int
+    overlap: int
+    llm_provider: OpenAIProvider | None = None
+
+
+class ChunkingStrategy(ABC):
+    @abstractmethod
+    def split(self, context: ChunkingContext) -> list[str]:
+        raise NotImplementedError
+
+
+class FixedChunkingStrategy(ChunkingStrategy):
+    def split(self, context: ChunkingContext) -> list[str]:
+        return split_text_into_chunks(context.text, context.chunk_size, context.overlap)
+
+
+class SemanticChunkingStrategy(ChunkingStrategy):
+    def __init__(self, *, use_llm_for_all_blocks: bool):
+        self.use_llm_for_all_blocks = use_llm_for_all_blocks
+
+    def split(self, context: ChunkingContext) -> list[str]:
+        blocks = _split_into_blocks(context.text, context.chunk_size)
+        if not blocks:
+            return []
+
+        provider = context.llm_provider or _build_default_llm_provider()
+        chunks: list[str] = []
+        for block in blocks:
+            use_llm = self.use_llm_for_all_blocks or _block_needs_llm(block, context.chunk_size)
+            if use_llm:
+                llm_chunks = _split_block_with_llm(
+                    provider,
+                    block,
+                    chunk_size=context.chunk_size,
+                    overlap=context.overlap,
+                )
+                if llm_chunks:
+                    chunks.extend(llm_chunks)
+                    continue
+            chunks.extend(split_text_into_chunks(block, context.chunk_size, context.overlap))
+
+        return _normalize_chunks_with_overlap(chunks, context.overlap)
+
+
+class LlamaIndexChunkingStrategy(ChunkingStrategy):
+    """
+    Semantic chunking by LlamaIndex.
+
+    Required instrumentation:
+    from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
+    LlamaIndexInstrumentor().instrument()
+    """
+
+    def split(self, context: ChunkingContext) -> list[str]:
+        normalized_text = str(context.text or "").strip()
+        if not normalized_text:
+            return []
+        try:
+            _ensure_llama_index_instrumented()
+            from llama_index.core import Document
+            from llama_index.core.node_parser import SemanticSplitterNodeParser
+            from llama_index.embeddings.openai import OpenAIEmbedding
+
+            embedding_model = (
+                Config.GRAPHITI_DEFAULT_EMBEDDING_MODEL
+                if str(Config.GRAPHITI_DEFAULT_EMBEDDING_MODEL or "").strip()
+                else "text-embedding-3-large"
+            )
+            embed_model = OpenAIEmbedding(
+                model=embedding_model,
+                api_key=Config.OPENAI_API_KEY or Config.LLM_API_KEY,
+                api_base=Config.OPENAI_BASE_URL or Config.LLM_BASE_URL,
+            )
+            splitter = SemanticSplitterNodeParser(
+                embed_model=embed_model,
+            )
+            nodes = splitter.get_nodes_from_documents([Document(text=normalized_text)])
+            chunks = []
+            for node in nodes:
+                content = getattr(node, "text", None)
+                if content is None and hasattr(node, "get_content"):
+                    content = node.get_content()
+                normalized = str(content or "").strip()
+                if normalized:
+                    chunks.append(normalized)
+            if not chunks:
+                return split_text_into_chunks(normalized_text, context.chunk_size, context.overlap)
+            return _normalize_chunks_with_overlap(chunks, context.overlap)
+        except Exception:
+            # Keep build resilient when LlamaIndex splitter fails.
+            return split_text_into_chunks(normalized_text, context.chunk_size, context.overlap)
 
 
 def split_text_with_mode(
@@ -45,36 +171,36 @@ def split_text_with_mode(
     llm_provider: OpenAIProvider | None = None,
 ) -> list[str]:
     normalized_mode = normalize_chunk_mode(chunk_mode)
-    normalized_chunk_size = max(int(chunk_size or 500), _MIN_CHUNK_SIZE)
-    normalized_overlap = max(0, min(int(overlap or 0), normalized_chunk_size - 1))
+    context = ChunkingContext(
+        text=str(text or ""),
+        chunk_size=max(int(chunk_size or 500), _MIN_CHUNK_SIZE),
+        overlap=0,
+        llm_provider=llm_provider,
+    )
+    context.overlap = max(0, min(int(overlap or 0), context.chunk_size - 1))
+    strategy = _resolve_chunking_strategy(normalized_mode)
+    return strategy.split(context)
 
-    if normalized_mode == CHUNK_MODE_FIXED:
-        return split_text_into_chunks(text, normalized_chunk_size, normalized_overlap)
 
-    blocks = _split_into_blocks(text, normalized_chunk_size)
-    if not blocks:
-        return []
+def _resolve_chunking_strategy(chunk_mode: str) -> ChunkingStrategy:
+    normalized_mode = normalize_chunk_mode(chunk_mode)
+    if normalized_mode == CHUNK_MODE_SEMANTIC:
+        return SemanticChunkingStrategy(use_llm_for_all_blocks=True)
+    if normalized_mode == CHUNK_MODE_HYBRID:
+        return SemanticChunkingStrategy(use_llm_for_all_blocks=False)
+    if normalized_mode == CHUNK_MODE_LLAMA_INDEX:
+        return LlamaIndexChunkingStrategy()
+    return FixedChunkingStrategy()
 
-    provider = llm_provider or _build_default_llm_provider()
-    chunks: list[str] = []
-    for block in blocks:
-        use_llm = normalized_mode == CHUNK_MODE_SEMANTIC or _block_needs_llm(block, normalized_chunk_size)
-        if use_llm:
-            llm_chunks = _split_block_with_llm(
-                provider,
-                block,
-                chunk_size=normalized_chunk_size,
-                overlap=normalized_overlap,
-            )
-            if llm_chunks:
-                chunks.extend(llm_chunks)
-                continue
-        chunks.extend(split_text_into_chunks(block, normalized_chunk_size, normalized_overlap))
 
-    cleaned_chunks = [chunk.strip() for chunk in chunks if str(chunk or "").strip()]
-    if normalized_overlap <= 0 or len(cleaned_chunks) <= 1:
-        return cleaned_chunks
-    return _apply_overlap(cleaned_chunks, normalized_overlap)
+def _ensure_llama_index_instrumented() -> None:
+    global _LLAMA_INDEX_INSTRUMENTED
+    if _LLAMA_INDEX_INSTRUMENTED:
+        return
+    from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
+
+    LlamaIndexInstrumentor().instrument()
+    _LLAMA_INDEX_INSTRUMENTED = True
 
 
 def _build_default_llm_provider() -> OpenAIProvider:
@@ -183,6 +309,13 @@ def _is_valid_llm_chunks(source_text: str, chunks: list[str]) -> bool:
             return False
         cursor = index + len(chunk)
     return True
+
+
+def _normalize_chunks_with_overlap(chunks: list[str], overlap: int) -> list[str]:
+    cleaned_chunks = [chunk.strip() for chunk in chunks if str(chunk or "").strip()]
+    if overlap <= 0 or len(cleaned_chunks) <= 1:
+        return cleaned_chunks
+    return _apply_overlap(cleaned_chunks, overlap)
 
 
 def _apply_overlap(chunks: list[str], overlap: int) -> list[str]:

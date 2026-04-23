@@ -1,5 +1,29 @@
+"""
+Copyright (c) 2026 Richard G and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 import re
 import os
+import hashlib
+import json
 import threading
 import time
 import traceback
@@ -13,14 +37,16 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import Config
 from app.core.managers.prompt_label_manager import PromptLabelManager
+from app.core.managers.batch_process_manager import BatchProcessManager
 from app.core.managers.project_manager import ProjectManager
 from app.core.managers.task_manager import TaskManager
 from app.core.schemas.project import ProjectStatus
 from app.core.schemas.task import TaskStatus
-from app.core.service.graph_builder import GraphBuilderService
+from app.core.service.graph_builder import GraphBuilderService, TaskCancelledError
 from app.core.utils.chucking import (
     CHUNK_MODE_FIXED,
     CHUNK_MODE_HYBRID,
+    CHUNK_MODE_LLAMA_INDEX,
     CHUNK_MODE_SEMANTIC,
     normalize_chunk_mode,
     split_text_with_mode,
@@ -28,6 +54,13 @@ from app.core.utils.chucking import (
 from app.core.utils.logger import get_logger
 from app.core.utils.text_file_parser import FileParser
 from app.core.utils.text_processor import TextProcessor
+from app.core.utils.db_query import (
+    get_latest_graph_build_resume_candidate,
+    get_latest_ontology_version_data,
+    insert_ontology_version_data,
+    list_ontology_versions_data,
+    merge_project_data_json_fields,
+)
 
 router = APIRouter()
 logger = get_logger("z_graph.api")
@@ -41,7 +74,12 @@ GRAPH_BACKEND_NEO4J = "neo4j"
 GRAPH_BACKEND_ORACLE = "oracle"
 GRAPHITI_BACKENDS = {GRAPH_BACKEND_NEO4J, GRAPH_BACKEND_ORACLE}
 SUPPORTED_GRAPH_BACKENDS = {GRAPH_BACKEND_ZEP_CLOUD, *GRAPHITI_BACKENDS}
-SUPPORTED_CHUNK_MODES = {CHUNK_MODE_FIXED, CHUNK_MODE_SEMANTIC, CHUNK_MODE_HYBRID}
+SUPPORTED_CHUNK_MODES = {
+    CHUNK_MODE_FIXED,
+    CHUNK_MODE_SEMANTIC,
+    CHUNK_MODE_HYBRID,
+    CHUNK_MODE_LLAMA_INDEX,
+}
 ProjectPatchBody = Annotated[dict[str, Any], Body(default_factory=dict)]
 DEV_APP_ENVS = {"dev", "development", "local"}
 
@@ -68,6 +106,61 @@ def _coerce_bool(value: Any) -> bool:
     if isinstance(value, int):
         return value != 0
     return False
+
+
+def _coerce_optional_positive_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _resolve_oracle_runtime_settings(
+    project: Any,
+    *,
+    use_project_overrides: bool | None = None,
+) -> dict[str, int | None]:
+    runtime_overrides_enabled = use_project_overrides
+    if runtime_overrides_enabled is None:
+        runtime_overrides_enabled = getattr(project, "enable_oracle_runtime_overrides", True)
+    runtime_overrides_enabled = bool(runtime_overrides_enabled)
+
+    if not runtime_overrides_enabled:
+        return {
+            "oracle_pool_min": _coerce_optional_positive_int(Config.ORACLE_POOL_MIN),
+            "oracle_pool_max": _coerce_optional_positive_int(Config.ORACLE_POOL_MAX),
+            "oracle_pool_increment": _coerce_optional_positive_int(Config.ORACLE_POOL_INCREMENT),
+            "oracle_max_coroutines": _coerce_optional_positive_int(Config.ORACLE_MAX_COROUTINES),
+        }
+
+    return {
+        "oracle_pool_min": (
+            _coerce_optional_positive_int(getattr(project, "oracle_pool_min", None))
+            or _coerce_optional_positive_int(Config.ORACLE_POOL_MIN)
+        ),
+        "oracle_pool_max": (
+            _coerce_optional_positive_int(getattr(project, "oracle_pool_max", None))
+            or _coerce_optional_positive_int(Config.ORACLE_POOL_MAX)
+        ),
+        "oracle_pool_increment": (
+            _coerce_optional_positive_int(getattr(project, "oracle_pool_increment", None))
+            or _coerce_optional_positive_int(Config.ORACLE_POOL_INCREMENT)
+        ),
+        "oracle_max_coroutines": (
+            _coerce_optional_positive_int(getattr(project, "oracle_max_coroutines", None))
+            or _coerce_optional_positive_int(Config.ORACLE_MAX_COROUTINES)
+        ),
+    }
+
+
+def _looks_like_missing_graph_error(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    return "not found" in message or "404" in message
 
 
 def _build_project_name_graph_id(project_name: Any) -> str:
@@ -118,6 +211,68 @@ def _resolve_graph_backend(*candidates: Any) -> str:
 
 def _client_backend_for_graph_backend(graph_backend: str) -> str:
     return GRAPH_BACKEND_ZEP_CLOUD if graph_backend == GRAPH_BACKEND_ZEP_CLOUD else "graphiti"
+
+
+def _graph_backend_display_name(graph_backend: str) -> str:
+    normalized = _normalize_graph_backend(graph_backend)
+    if normalized == GRAPH_BACKEND_ZEP_CLOUD:
+        return "Zep Cloud"
+    if normalized == GRAPH_BACKEND_NEO4J:
+        return "Neo4j"
+    if normalized == GRAPH_BACKEND_ORACLE:
+        return "Oracle"
+    return "Graph Backend"
+
+
+def _require_project_id_for_oracle_backend(
+    resolved_graph_backend: str,
+    project_id: str,
+    *,
+    route_name: str,
+) -> JSONResponse | None:
+    if _normalize_graph_backend(resolved_graph_backend) != GRAPH_BACKEND_ORACLE:
+        return None
+    if str(project_id or "").strip():
+        return None
+    return _error_response(
+        400,
+        f"project_id is required for Oracle graph backend in {route_name}",
+    )
+
+
+def _normalize_graphiti_embedding_model(value: Any) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    return normalized
+
+
+def _normalize_pdf_page(value: Any, *, field_name: str, default: int | None = None) -> int | None:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{field_name} must be greater than 0")
+    return parsed
+
+
+def _resolve_graphiti_embedding_model(*candidates: Any) -> str:
+    allowed = set(Config.GRAPHITI_EMBEDDING_MODELS)
+    for value in candidates:
+        normalized = _normalize_graphiti_embedding_model(value)
+        if not normalized:
+            continue
+        if normalized in allowed:
+            return normalized
+        logger.warning(
+            "Ignoring unsupported graphiti embedding model '%s'; allowed=%s",
+            normalized,
+            Config.GRAPHITI_EMBEDDING_MODELS,
+        )
+    return Config.GRAPHITI_DEFAULT_EMBEDDING_MODEL
 
 
 def _sanitize_ontology_payload(payload: Any) -> dict[str, Any]:
@@ -263,13 +418,496 @@ def _timed_task_call(
         )
 
 
+def _is_task_cancelled(task_manager: TaskManager, task_id: str) -> bool:
+    return task_manager.is_cancelled(task_id)
+
+
+def _compute_source_text_hash(text: str) -> str:
+    return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
+
+
+def _compute_ontology_hash(ontology: dict[str, Any]) -> str:
+    canonical = json.dumps(ontology or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _merge_string_lists(base_values: Any, incoming_values: Any) -> list[str]:
+    merged: list[str] = []
+    seen = set()
+    for value in list(base_values or []) + list(incoming_values or []):
+        normalized = str(value or "").strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(normalized)
+    return merged
+
+
+def _merge_json_list(base_values: Any, incoming_values: Any) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen = set()
+    for value in list(base_values or []) + list(incoming_values or []):
+        if not isinstance(value, dict):
+            continue
+        key = _canonical_json(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(dict(value))
+    return merged
+
+
+def _merge_source_targets(base_values: Any, incoming_values: Any) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    seen = set()
+    for value in list(base_values or []) + list(incoming_values or []):
+        if not isinstance(value, dict):
+            continue
+        source = str(value.get("source") or "").strip()
+        target = str(value.get("target") or "").strip()
+        if not source or not target:
+            continue
+        key = (source.lower(), target.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append({"source": source, "target": target})
+    return merged
+
+
+def _merge_ontology_payload(base_ontology: dict[str, Any], incoming_ontology: dict[str, Any]) -> dict[str, Any]:
+    base_entity_types = list((base_ontology or {}).get("entity_types") or [])
+    incoming_entity_types = list((incoming_ontology or {}).get("entity_types") or [])
+    base_edge_types = list((base_ontology or {}).get("edge_types") or [])
+    incoming_edge_types = list((incoming_ontology or {}).get("edge_types") or [])
+
+    def _merge_type_list(base_items: list[Any], incoming_items: list[Any], *, is_relationship: bool) -> list[dict[str, Any]]:
+        merged_by_name: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for raw_item in base_items + incoming_items:
+            if not isinstance(raw_item, dict):
+                continue
+            name = _normalize_ontology_type_name(raw_item.get("name"))
+            if not name:
+                continue
+            key = name.lower()
+            existing = merged_by_name.get(key)
+            if existing is None:
+                merged_by_name[key] = {
+                    "name": name,
+                    "description": str(raw_item.get("description") or "").strip(),
+                    "attributes": _merge_json_list(raw_item.get("attributes"), []),
+                    "examples": _merge_string_lists(raw_item.get("examples"), []) if not is_relationship else [],
+                    "source_targets": _merge_source_targets(raw_item.get("source_targets"), [])
+                    if is_relationship
+                    else [],
+                }
+                order.append(key)
+                continue
+            if not existing.get("description"):
+                existing["description"] = str(raw_item.get("description") or "").strip()
+            existing["attributes"] = _merge_json_list(existing.get("attributes"), raw_item.get("attributes"))
+            if is_relationship:
+                existing["source_targets"] = _merge_source_targets(
+                    existing.get("source_targets"),
+                    raw_item.get("source_targets"),
+                )
+            else:
+                existing["examples"] = _merge_string_lists(existing.get("examples"), raw_item.get("examples"))
+
+        output: list[dict[str, Any]] = []
+        for key in order:
+            item = merged_by_name[key]
+            if is_relationship:
+                output.append(
+                    {
+                        "name": item["name"],
+                        "description": item.get("description", ""),
+                        "attributes": item.get("attributes", []),
+                        "source_targets": item.get("source_targets", []),
+                    }
+                )
+            else:
+                output.append(
+                    {
+                        "name": item["name"],
+                        "description": item.get("description", ""),
+                        "attributes": item.get("attributes", []),
+                        "examples": item.get("examples", []),
+                    }
+                )
+        return output
+
+    return {
+        "entity_types": _merge_type_list(base_entity_types, incoming_entity_types, is_relationship=False),
+        "edge_types": _merge_type_list(base_edge_types, incoming_edge_types, is_relationship=True),
+    }
+
+
+def _create_ontology_version_if_possible(
+    *,
+    project_id: str,
+    ontology: dict[str, Any],
+    source: str,
+    parent_version_ids: list[int] | None = None,
+    created_by_task_id: str | None = None,
+) -> int | None:
+    if not ProjectManager._use_postgres_storage():
+        return None
+    connection_string = ProjectManager._get_storage_connection_string()
+    ontology_hash = _compute_ontology_hash(ontology)
+    row = insert_ontology_version_data(
+        connection_string,
+        project_id=project_id,
+        source=source,
+        ontology_json=ontology,
+        ontology_hash=ontology_hash,
+        parent_version_ids=parent_version_ids,
+        created_by_task_id=created_by_task_id,
+    )
+    return int(row.get("id")) if row.get("id") is not None else None
+
+
+def _get_latest_ontology_version_id(project_id: str) -> int | None:
+    if not ProjectManager._use_postgres_storage():
+        return None
+    connection_string = ProjectManager._get_storage_connection_string()
+    latest = get_latest_ontology_version_data(connection_string, project_id=project_id)
+    if not latest:
+        return None
+    return int(latest["id"])
+
+
+def _build_graph_identity_key(
+    *,
+    project_id: str,
+    graph_backend: str,
+    chunk_mode: str,
+    chunk_size: int,
+    chunk_overlap: int,
+    source_text_hash: str,
+    ontology_hash: str,
+) -> str:
+    raw = "|".join(
+        [
+            str(project_id or "").strip(),
+            str(graph_backend or "").strip().lower(),
+            str(chunk_mode or "").strip().lower(),
+            str(int(chunk_size)),
+            str(int(chunk_overlap)),
+            str(source_text_hash or "").strip(),
+            str(ontology_hash or "").strip(),
+        ]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _resolve_chunk_params_for_mode(
+    *,
+    chunk_mode: str,
+    chunk_size_value: Any,
+    chunk_overlap_value: Any,
+) -> tuple[int, int]:
+    if chunk_mode == CHUNK_MODE_LLAMA_INDEX:
+        # LlamaIndex semantic splitting is not driven by fixed size/overlap knobs.
+        return -1, -1
+    chunk_size = int(chunk_size_value)
+    chunk_overlap = int(chunk_overlap_value)
+    return chunk_size, chunk_overlap
+
+
+def _resolve_graph_build_batch_size(request_value: Any) -> int:
+    default = max(1, int(Config.GRAPH_BUILD_BATCH_SIZE))
+    if request_value is None:
+        return default
+    try:
+        parsed = int(request_value)
+    except (TypeError, ValueError):
+        return default
+    if parsed < 1:
+        return default
+    return parsed
+
+
 def _build_project_response_data(project: Any) -> dict[str, Any]:
     project_data = project.to_dict()
+    latest_ontology_version_id = _get_latest_ontology_version_id(project_data.get("project_id"))
+    if latest_ontology_version_id is not None:
+        project_data["ontology_version_id"] = latest_ontology_version_id
     project_data["prompt_label_info"] = PromptLabelManager.get_project_label_info(
         label_name=project_data.get("prompt_label"),
         project_id=project_data.get("project_id"),
+        label_id=project_data.get("prompt_label_id"),
     )
     return project_data
+
+
+_graphiti_warmup_state_lock = threading.Lock()
+_graphiti_warmup_inflight: set[str] = set()
+_graphiti_warmup_recent_completed: dict[str, float] = {}
+
+
+def _collect_graphiti_warmup_context(
+    project: Any,
+    *,
+    graph_ids: list[str] | None = None,
+) -> dict[str, Any] | None:
+    ontology = getattr(project, "ontology", None)
+    if not isinstance(ontology, dict) or not ontology:
+        return None
+
+    graph_backend = _normalize_graph_backend(getattr(project, "graph_backend", None))
+    if graph_backend not in GRAPHITI_BACKENDS:
+        return None
+
+    project_id = str(getattr(project, "project_id", "") or "").strip()
+    if not project_id:
+        return None
+
+    candidate_graph_ids: list[str] = []
+    if graph_ids:
+        candidate_graph_ids = [str(graph_id or "").strip() for graph_id in graph_ids]
+    else:
+        candidate_graph_ids = [
+            str(getattr(project, "zep_graph_id", "") or "").strip(),
+            project_id,
+        ]
+    unique_graph_ids = [graph_id for graph_id in dict.fromkeys(candidate_graph_ids) if graph_id]
+    if not unique_graph_ids:
+        return None
+
+    return {
+        "project_id": project_id,
+        "ontology": ontology,
+        "ontology_hash": _compute_ontology_hash(ontology),
+        "graph_backend": graph_backend,
+        "graphiti_embedding_model": _resolve_graphiti_embedding_model(
+            getattr(project, "graphiti_embedding_model", None)
+        ),
+        "oracle_runtime": _resolve_oracle_runtime_settings(project),
+        "graph_ids": unique_graph_ids,
+    }
+
+
+def _claim_graphiti_warmup_key(key: str, ttl_seconds: int) -> bool:
+    now = time.monotonic()
+    with _graphiti_warmup_state_lock:
+        expired = [
+            dedupe_key
+            for dedupe_key, finished_at in _graphiti_warmup_recent_completed.items()
+            if now - finished_at >= ttl_seconds
+        ]
+        for expired_key in expired:
+            _graphiti_warmup_recent_completed.pop(expired_key, None)
+
+        if key in _graphiti_warmup_inflight:
+            return False
+        last_finished_at = _graphiti_warmup_recent_completed.get(key)
+        if last_finished_at is not None and now - last_finished_at < ttl_seconds:
+            return False
+        _graphiti_warmup_inflight.add(key)
+    return True
+
+
+def _release_graphiti_warmup_key(key: str) -> None:
+    with _graphiti_warmup_state_lock:
+        _graphiti_warmup_inflight.discard(key)
+        _graphiti_warmup_recent_completed[key] = time.monotonic()
+
+
+def _set_ontology_with_timeout(
+    builder: GraphBuilderService,
+    graph_id: str,
+    ontology: dict[str, Any],
+    timeout_seconds: float,
+) -> tuple[bool, Exception | None]:
+    result: dict[str, Exception | None] = {"error": None}
+    finished_event = threading.Event()
+
+    def _invoke() -> None:
+        try:
+            builder.set_ontology(graph_id, ontology)
+        except Exception as exc:  # pragma: no cover
+            result["error"] = exc
+        finally:
+            finished_event.set()
+
+    thread = threading.Thread(target=_invoke, daemon=True, name=f"warmup-set-ontology-{graph_id}")
+    thread.start()
+    completed = finished_event.wait(timeout_seconds)
+    if not completed:
+        return False, TimeoutError(
+            f"Timed out after {timeout_seconds:.2f}s while warming graph ontology cache"
+        )
+    return True, result["error"]
+
+
+def _warm_graphiti_ontology_cache_worker(
+    *,
+    project_id: str,
+    graph_id: str,
+    dedupe_key: str,
+    ontology: dict[str, Any],
+    graph_backend: str,
+    graphiti_embedding_model: str,
+    oracle_runtime: dict[str, int | None],
+    source: str,
+) -> None:
+    timeout_seconds = max(0.5, float(Config.PROJECT_GET_WARMUP_TIMEOUT_SECONDS))
+    started_at = time.perf_counter()
+    try:
+        logger.info(
+            "Graphiti cache warm-up start source=%s project_id=%s graph_id=%s timeout_s=%.2f",
+            source,
+            project_id,
+            graph_id,
+            timeout_seconds,
+        )
+        builder = GraphBuilderService(
+            backend=_client_backend_for_graph_backend(graph_backend),
+            graph_backend=graph_backend,
+            graphiti_embedding_model=graphiti_embedding_model,
+            api_key=Config.ZEP_API_KEY,
+            project_id=project_id or None,
+            oracle_pool_min=oracle_runtime["oracle_pool_min"] if graph_backend == GRAPH_BACKEND_ORACLE else None,
+            oracle_pool_max=oracle_runtime["oracle_pool_max"] if graph_backend == GRAPH_BACKEND_ORACLE else None,
+            oracle_pool_increment=oracle_runtime["oracle_pool_increment"]
+            if graph_backend == GRAPH_BACKEND_ORACLE
+            else None,
+            oracle_max_coroutines=oracle_runtime["oracle_max_coroutines"]
+            if graph_backend == GRAPH_BACKEND_ORACLE
+            else None,
+        )
+        completed, maybe_error = _set_ontology_with_timeout(
+            builder=builder,
+            graph_id=graph_id,
+            ontology=ontology,
+            timeout_seconds=timeout_seconds,
+        )
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        if not completed:
+            logger.warning(
+                "Graphiti cache warm-up timeout source=%s project_id=%s graph_id=%s elapsed_ms=%s error=%s",
+                source,
+                project_id,
+                graph_id,
+                elapsed_ms,
+                str(maybe_error),
+            )
+            return
+        if maybe_error is not None:
+            logger.warning(
+                "Graphiti cache warm-up failed source=%s project_id=%s graph_id=%s elapsed_ms=%s error=%s",
+                source,
+                project_id,
+                graph_id,
+                elapsed_ms,
+                str(maybe_error),
+            )
+            return
+        logger.info(
+            "Graphiti cache warm-up done source=%s project_id=%s graph_id=%s elapsed_ms=%s",
+            source,
+            project_id,
+            graph_id,
+            elapsed_ms,
+        )
+    except Exception as exc:
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.warning(
+            "Graphiti cache warm-up crashed source=%s project_id=%s graph_id=%s elapsed_ms=%s error=%s",
+            source,
+            project_id,
+            graph_id,
+            elapsed_ms,
+            str(exc),
+        )
+    finally:
+        _release_graphiti_warmup_key(dedupe_key)
+
+
+def _launch_graphiti_ontology_cache_warmup(
+    project: Any,
+    *,
+    graph_ids: list[str] | None = None,
+    source: str = "get_project",
+) -> None:
+    context = _collect_graphiti_warmup_context(project, graph_ids=graph_ids)
+    if context is None:
+        return
+
+    project_id = str(context["project_id"])
+    ontology = context["ontology"]
+    ontology_hash = str(context["ontology_hash"])
+    graph_backend = str(context["graph_backend"])
+    graphiti_embedding_model = str(context["graphiti_embedding_model"])
+    oracle_runtime = context["oracle_runtime"]
+    ttl_seconds = max(1, int(Config.PROJECT_GET_WARMUP_DEDUPE_TTL_SECONDS))
+    for graph_id in context["graph_ids"]:
+        dedupe_key = f"{project_id}:{graph_id}:{ontology_hash}"
+        if not _claim_graphiti_warmup_key(dedupe_key, ttl_seconds):
+            logger.info(
+                "Graphiti cache warm-up skipped source=%s project_id=%s graph_id=%s reason=duplicate",
+                source,
+                project_id,
+                graph_id,
+            )
+            continue
+        thread = threading.Thread(
+            target=_warm_graphiti_ontology_cache_worker,
+            kwargs={
+                "project_id": project_id,
+                "graph_id": graph_id,
+                "dedupe_key": dedupe_key,
+                "ontology": ontology,
+                "graph_backend": graph_backend,
+                "graphiti_embedding_model": graphiti_embedding_model,
+                "oracle_runtime": oracle_runtime,
+                "source": source,
+            },
+            daemon=True,
+            name=f"warmup-{project_id}-{graph_id}",
+        )
+        thread.start()
+
+
+def _warm_graphiti_ontology_cache(
+    project: Any,
+    *,
+    graph_ids: list[str] | None = None,
+    source: str = "sync",
+) -> None:
+    context = _collect_graphiti_warmup_context(project, graph_ids=graph_ids)
+    if context is None:
+        return
+    project_id = str(context["project_id"])
+    ontology = context["ontology"]
+    ontology_hash = str(context["ontology_hash"])
+    graph_backend = str(context["graph_backend"])
+    graphiti_embedding_model = str(context["graphiti_embedding_model"])
+    oracle_runtime = context["oracle_runtime"]
+    ttl_seconds = max(1, int(Config.PROJECT_GET_WARMUP_DEDUPE_TTL_SECONDS))
+    for graph_id in context["graph_ids"]:
+        dedupe_key = f"{project_id}:{graph_id}:{ontology_hash}"
+        if not _claim_graphiti_warmup_key(dedupe_key, ttl_seconds):
+            continue
+        _warm_graphiti_ontology_cache_worker(
+            project_id=project_id,
+            graph_id=graph_id,
+            dedupe_key=dedupe_key,
+            ontology=ontology,
+            graph_backend=graph_backend,
+            graphiti_embedding_model=graphiti_embedding_model,
+            oracle_runtime=oracle_runtime,
+            source=source,
+        )
 
 
 @router.get("/project/list")
@@ -287,9 +925,114 @@ def get_project(project_id: str) -> Any:
     project = ProjectManager.get_project(project_id)
     if not project:
         return _error_response(404, f"Project not found: {project_id}")
+    _launch_graphiti_ontology_cache_warmup(project, source="get_project")
     return {
         "success": True,
         "data": _build_project_response_data(project),
+    }
+
+
+@router.get("/project/{project_id}/graph-build/resume-candidate")
+def get_graph_build_resume_candidate(project_id: str) -> Any:
+    project = ProjectManager.get_project(project_id)
+    if not project:
+        return _error_response(404, f"Project not found: {project_id}")
+
+    if not ProjectManager._use_postgres_storage():
+        return {"success": True, "data": None}
+
+    connection_string = ProjectManager._get_storage_connection_string()
+    if not connection_string:
+        return {"success": True, "data": None}
+
+    candidate = get_latest_graph_build_resume_candidate(
+        connection_string,
+        project_id=project_id,
+    )
+    if not candidate:
+        return {"success": True, "data": None}
+
+    return {
+        "success": True,
+        "data": {
+            "task_id": candidate.get("task_id"),
+            "status": candidate.get("status"),
+            "total_batches": candidate.get("total_batches"),
+            "last_completed_batch_index": candidate.get("last_completed_batch_index"),
+            "batch_size": candidate.get("batch_size"),
+            "resume_state": candidate.get("resume_state"),
+            "updated_at": candidate.get("updated_at"),
+        },
+    }
+
+
+@router.get("/project/{project_id}/ontology-versions")
+def list_project_ontology_versions(project_id: str, limit: int = Query(default=30, ge=1, le=200)) -> Any:
+    project = ProjectManager.get_project(project_id)
+    if not project:
+        return _error_response(404, f"Project not found: {project_id}")
+    if not ProjectManager._use_postgres_storage():
+        return {
+            "success": True,
+            "data": [],
+            "count": 0,
+        }
+    rows = list_ontology_versions_data(
+        ProjectManager._get_storage_connection_string(),
+        project_id=project_id,
+        limit=limit,
+    )
+    return {
+        "success": True,
+        "data": rows,
+        "count": len(rows),
+    }
+
+
+@router.post("/project/{project_id}/ontology/merge")
+def merge_project_ontology(project_id: str, data: ProjectPatchBody) -> Any:
+    project = ProjectManager.get_project(project_id)
+    if not project:
+        return _error_response(404, f"Project not found: {project_id}")
+    incoming_ontology_raw = (data or {}).get("incoming_ontology")
+    if incoming_ontology_raw is None:
+        return _error_response(400, "incoming_ontology is required")
+    try:
+        incoming_ontology = _sanitize_ontology_payload(incoming_ontology_raw)
+        base_ontology = _sanitize_ontology_payload((data or {}).get("base_ontology") or project.ontology or {})
+    except ValueError as exc:
+        return _error_response(400, str(exc))
+
+    merged_ontology = _merge_ontology_payload(base_ontology, incoming_ontology)
+    parent_version_ids: list[int] = []
+    latest_id = _get_latest_ontology_version_id(project.project_id)
+    if latest_id is not None:
+        parent_version_ids.append(latest_id)
+
+    project.ontology = merged_ontology
+    project.error = None
+    preserve_graph_status = _coerce_bool((data or {}).get("preserve_graph_status", True))
+    if not preserve_graph_status:
+        project.status = ProjectStatus.ONTOLOGY_GENERATED
+        project.zep_graph_id = None
+        project.project_workspace_id = None
+        project.zep_graph_address = None
+        project.graph_build_task_id = None
+    ProjectManager.save_project(project)
+    new_version_id = _create_ontology_version_if_possible(
+        project_id=project.project_id,
+        ontology=merged_ontology,
+        source="merged",
+        parent_version_ids=parent_version_ids or None,
+    )
+    return {
+        "success": True,
+        "message": f"Ontology merged for project: {project_id}",
+        "data": {
+            "project_id": project.project_id,
+            "ontology": merged_ontology,
+            "ontology_version_id": new_version_id,
+        },
     }
 
 
@@ -302,33 +1045,68 @@ def update_project(project_id: str, data: ProjectPatchBody) -> Any:
     name = str((data or {}).get("name", "")).strip()
     prompt_label = str((data or {}).get("prompt_label", "")).strip()
     raw_ontology = (data or {}).get("ontology")
+    raw_refresh_data_while_build = (data or {}).get("refresh_data_while_build")
+    has_refresh_data_while_build = raw_refresh_data_while_build is not None
+    preserve_graph_status = _coerce_bool((data or {}).get("preserve_graph_status"))
     has_ontology = raw_ontology is not None
-    if not name and not prompt_label and not has_ontology:
-        return _error_response(400, "At least one field is required: name, prompt_label, or ontology")
+    if not name and not prompt_label and not has_ontology and not has_refresh_data_while_build:
+        return _error_response(
+            400,
+            "At least one field is required: name, prompt_label, ontology, or refresh_data_while_build",
+        )
 
     if name:
         project.name = name
     if prompt_label:
-        project.prompt_label = PromptLabelManager.ensure_label_exists(prompt_label)
+        label = PromptLabelManager.create_label(prompt_label)
+        project.prompt_label = str(label.get("name") or prompt_label)
+        project.prompt_label_id = (
+            int(label["id"]) if label.get("id") is not None else None
+        )
+    if has_refresh_data_while_build:
+        project.refresh_data_while_build = _coerce_bool(raw_refresh_data_while_build)
     if has_ontology:
+        existing_graph_id = str(getattr(project, "zep_graph_id", "") or "").strip()
+        original_ontology_version_id = _get_latest_ontology_version_id(project.project_id)
         try:
             project.ontology = _sanitize_ontology_payload(raw_ontology)
         except ValueError as exc:
             return _error_response(400, str(exc))
 
-        # Ontology edits require rebuilding graph with the updated schema.
-        project.status = ProjectStatus.ONTOLOGY_GENERATED
-        project.zep_graph_id = None
-        project.project_workspace_id = None
-        project.zep_graph_address = None
-        project.graph_build_task_id = None
-        project.error = None
+        if not preserve_graph_status:
+            # Ontology edits require rebuilding graph with the updated schema.
+            project.status = ProjectStatus.ONTOLOGY_GENERATED
+            project.zep_graph_id = None
+            project.project_workspace_id = None
+            project.zep_graph_address = None
+            project.graph_build_task_id = None
+            project.error = None
+        latest_ontology_version_id = _create_ontology_version_if_possible(
+            project_id=project.project_id,
+            ontology=project.ontology,
+            source="merged" if preserve_graph_status else "manual",
+            parent_version_ids=[original_ontology_version_id] if original_ontology_version_id else None,
+        )
+    else:
+        latest_ontology_version_id = None
 
     ProjectManager.save_project(project)
+    if has_ontology:
+        _warm_graphiti_ontology_cache(
+            project,
+            graph_ids=[
+                existing_graph_id,
+                str(getattr(project, "project_id", "") or "").strip(),
+            ],
+            source="update_project",
+        )
+    response_data = _build_project_response_data(project)
+    if latest_ontology_version_id is not None:
+        response_data["ontology_version_id"] = latest_ontology_version_id
     return {
         "success": True,
         "message": f"Project updated: {project_id}",
-        "data": _build_project_response_data(project),
+        "data": response_data,
     }
 
 
@@ -371,12 +1149,33 @@ def create_project_draft(
     prompt_label: str = Form("Production"),
     graph_backend: str = Form(""),
     project_id: str = Form(""),
+    pdf_page_from: int | None = Form(None),
+    pdf_page_to: int | None = Form(None),
 ) -> Any:
     try:
         normalized_project_id = str(project_id or "").strip()
         normalized_project_name = str(project_name or "").strip() or "Unnamed Project"
         normalized_graph_backend = _normalize_graph_backend(graph_backend)
         normalized_prompt_label = str(prompt_label or "").strip() or "Production"
+        normalized_pdf_page_from = _normalize_pdf_page(
+            pdf_page_from,
+            field_name="pdf_page_from",
+            default=None,
+        )
+        normalized_pdf_page_to = _normalize_pdf_page(
+            pdf_page_to,
+            field_name="pdf_page_to",
+            default=None,
+        )
+        if (
+            normalized_pdf_page_from is not None
+            and normalized_pdf_page_to is not None
+            and normalized_pdf_page_from > normalized_pdf_page_to
+        ):
+            normalized_pdf_page_from, normalized_pdf_page_to = (
+                normalized_pdf_page_to,
+                normalized_pdf_page_from,
+            )
 
         if normalized_project_id:
             project = ProjectManager.get_project(normalized_project_id)
@@ -388,7 +1187,9 @@ def create_project_draft(
             created_new_project = True
 
         project.name = normalized_project_name
-        project.prompt_label = PromptLabelManager.ensure_label_exists(normalized_prompt_label)
+        label = PromptLabelManager.create_label(normalized_prompt_label)
+        project.prompt_label = str(label.get("name") or normalized_prompt_label)
+        project.prompt_label_id = int(label["id"]) if label.get("id") is not None else None
         if normalized_graph_backend:
             project.graph_backend = normalized_graph_backend
         elif not _normalize_graph_backend(getattr(project, "graph_backend", None)):
@@ -416,7 +1217,11 @@ def create_project_draft(
                 }
             )
             try:
-                extracted_text = FileParser.extract_text(file_info["path"])
+                extracted_text = FileParser.extract_text(
+                    file_info["path"],
+                    pdf_page_from=normalized_pdf_page_from,
+                    pdf_page_to=normalized_pdf_page_to,
+                )
                 extracted_text = TextProcessor.preprocess_text(extracted_text)
                 if extracted_text:
                     extracted_sections.append(
@@ -482,6 +1287,36 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
         if project.status == ProjectStatus.CREATED:
             return _error_response(400, "missing ontology, please refer to /ontology/generate")
 
+        task_manager = TaskManager()
+        if project.status == ProjectStatus.GRAPH_BUILDING:
+            build_tid = str(getattr(project, "graph_build_task_id", "") or "").strip()
+            if not task_manager.graph_build_task_is_active(build_tid):
+                logger.info(
+                    "Clearing stale graph_building for project=%s (task_id=%s not active in this process)",
+                    project_id,
+                    build_tid or "-",
+                )
+                project.status = ProjectStatus.ONTOLOGY_GENERATED
+                project.graph_build_task_id = None
+                project.error = None
+                ProjectManager.save_project(project)
+                if ProjectManager._use_postgres_storage():
+                    try:
+                        merge_project_data_json_fields(
+                            ProjectManager._get_storage_connection_string(),
+                            project_id=project_id,
+                            fields={
+                                "status": ProjectStatus.ONTOLOGY_GENERATED.value,
+                                "graph_build_task_id": None,
+                                "error": None,
+                            },
+                        )
+                    except Exception:
+                        logger.exception(
+                            "merge_project_data_json_fields after stale graph_building recovery failed project_id=%s",
+                            project_id,
+                        )
+
         if project.status == ProjectStatus.GRAPH_BUILDING and not force:
             return JSONResponse(
                 status_code=400,
@@ -492,17 +1327,41 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                 },
             )
 
+        did_force_reset = False
         if force and project.status in {
             ProjectStatus.GRAPH_BUILDING,
             ProjectStatus.FAILED,
             ProjectStatus.GRAPH_COMPLETED,
         }:
+            did_force_reset = True
             project.status = ProjectStatus.ONTOLOGY_GENERATED
             project.zep_graph_id = None
             project.project_workspace_id = None
             project.zep_graph_address = None
             project.graph_build_task_id = None
             project.error = None
+
+        if did_force_reset:
+            ProjectManager.save_project(project)
+            if ProjectManager._use_postgres_storage():
+                try:
+                    merge_project_data_json_fields(
+                        ProjectManager._get_storage_connection_string(),
+                        project_id=project_id,
+                        fields={
+                            "status": ProjectStatus.ONTOLOGY_GENERATED.value,
+                            "graph_build_task_id": None,
+                            "zep_graph_id": None,
+                            "project_workspace_id": None,
+                            "zep_graph_address": None,
+                            "error": None,
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "merge_project_data_json_fields after force reset failed project_id=%s",
+                        project_id,
+                    )
 
         requested_graph_backend = _normalize_graph_backend(data.get("graph_backend"))
         project_graph_backend = _normalize_graph_backend(getattr(project, "graph_backend", None))
@@ -529,34 +1388,106 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
 
         project_name_graph_id = ""
         if use_project_name_as_graph_id:
-            if resolved_graph_backend == GRAPH_BACKEND_ZEP_CLOUD:
-                project_name_graph_id = _build_project_name_graph_id(project.name)
-                if not project_name_graph_id:
-                    return _error_response(
-                        400,
-                        "project name cannot be converted to a valid graph id for zep_cloud",
-                    )
-            else:
-                logger.info(
-                    "Ignoring use_project_name_as_graph_id because backend is '%s'",
-                    resolved_graph_backend or "unknown",
+            project_name_graph_id = _build_project_name_graph_id(project.name)
+            if not project_name_graph_id:
+                return _error_response(
+                    400,
+                    "project name cannot be converted to a valid graph id",
                 )
 
         resolved_graph_id = project_name_graph_id or requested_graph_id or existing_graph_id or None
 
         graph_name = data.get("graph_name", project.name or "imp Graph")
-        chunk_size = int(data.get("chunk_size", project.chunk_size or DEFAULT_CHUNK_SIZE))
-        chunk_overlap = int(
-            data.get("chunk_overlap", project.chunk_overlap or DEFAULT_CHUNK_OVERLAP)
+        graph_label = str(data.get("graph_label") or "").strip() or None
+        override_graph = (
+            _coerce_bool(data.get("override"))
+            or _coerce_bool(data.get("overwrite"))
+            or _coerce_bool(data.get("override_graph"))
         )
+        raw_enable_otel_tracing = data.get("enable_otel_tracing")
+        request_enable_otel_tracing = (
+            _coerce_bool(raw_enable_otel_tracing) if raw_enable_otel_tracing is not None else None
+        )
+        project_enable_otel_tracing = getattr(project, "enable_otel_tracing", None)
+        if not isinstance(project_enable_otel_tracing, bool):
+            project_enable_otel_tracing = None
+        enable_otel_tracing = (
+            request_enable_otel_tracing
+            if request_enable_otel_tracing is not None
+            else (
+                project_enable_otel_tracing
+                if project_enable_otel_tracing is not None
+                else Config.APPLY_LANGFUSE_TO_GRAPHITI_TRACE
+            )
+        )
+        raw_enable_oracle_runtime_overrides = data.get("enable_oracle_runtime_overrides")
+        if raw_enable_oracle_runtime_overrides is not None:
+            enable_oracle_runtime_overrides = _coerce_bool(raw_enable_oracle_runtime_overrides)
+        else:
+            enable_oracle_runtime_overrides = bool(
+                getattr(project, "enable_oracle_runtime_overrides", True)
+            )
+
+        if enable_oracle_runtime_overrides:
+            existing_oracle_runtime = _resolve_oracle_runtime_settings(project, use_project_overrides=True)
+            request_oracle_pool_min = _coerce_optional_positive_int(data.get("oracle_pool_min"))
+            request_oracle_pool_max = _coerce_optional_positive_int(data.get("oracle_pool_max"))
+            request_oracle_pool_increment = _coerce_optional_positive_int(data.get("oracle_pool_increment"))
+            request_oracle_max_coroutines = _coerce_optional_positive_int(data.get("oracle_max_coroutines"))
+            oracle_pool_min = (
+                request_oracle_pool_min
+                if "oracle_pool_min" in data
+                else existing_oracle_runtime["oracle_pool_min"]
+            )
+            oracle_pool_max = (
+                request_oracle_pool_max
+                if "oracle_pool_max" in data
+                else existing_oracle_runtime["oracle_pool_max"]
+            )
+            oracle_pool_increment = (
+                request_oracle_pool_increment
+                if "oracle_pool_increment" in data
+                else existing_oracle_runtime["oracle_pool_increment"]
+            )
+            oracle_max_coroutines = (
+                request_oracle_max_coroutines
+                if "oracle_max_coroutines" in data
+                else existing_oracle_runtime["oracle_max_coroutines"]
+            )
+        else:
+            global_oracle_runtime = _resolve_oracle_runtime_settings(
+                project,
+                use_project_overrides=False,
+            )
+            oracle_pool_min = global_oracle_runtime["oracle_pool_min"]
+            oracle_pool_max = global_oracle_runtime["oracle_pool_max"]
+            oracle_pool_increment = global_oracle_runtime["oracle_pool_increment"]
+            oracle_max_coroutines = global_oracle_runtime["oracle_max_coroutines"]
         chunk_mode = normalize_chunk_mode(data.get("chunk_mode", getattr(project, "chunk_mode", None)))
         if chunk_mode not in SUPPORTED_CHUNK_MODES:
             chunk_mode = CHUNK_MODE_FIXED
+        chunk_size, chunk_overlap = _resolve_chunk_params_for_mode(
+            chunk_mode=chunk_mode,
+            chunk_size_value=data.get("chunk_size", project.chunk_size or DEFAULT_CHUNK_SIZE),
+            chunk_overlap_value=data.get("chunk_overlap", project.chunk_overlap or DEFAULT_CHUNK_OVERLAP),
+        )
+        graphiti_embedding_model = _resolve_graphiti_embedding_model(
+            data.get("graphiti_embedding_model"),
+            getattr(project, "graphiti_embedding_model", None),
+        )
 
         project.chunk_size = chunk_size
         project.chunk_overlap = chunk_overlap
         project.chunk_mode = chunk_mode
         project.graph_backend = resolved_graph_backend
+        project.graphiti_embedding_model = graphiti_embedding_model
+        project.enable_otel_tracing = enable_otel_tracing
+        project.enable_oracle_runtime_overrides = enable_oracle_runtime_overrides
+        if enable_oracle_runtime_overrides:
+            project.oracle_pool_min = oracle_pool_min
+            project.oracle_pool_max = oracle_pool_max
+            project.oracle_pool_increment = oracle_pool_increment
+            project.oracle_max_coroutines = oracle_max_coroutines
 
         text = ProjectManager.get_extracted_text(project_id)
         if not text:
@@ -566,8 +1497,51 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
         if not ontology:
             return _error_response(400, "no ontology")
 
-        task_manager = TaskManager()
-        task_id = task_manager.create_task(f"build_graph: {graph_name}")
+        source_text_hash = _compute_source_text_hash(text)
+        ontology_hash = _compute_ontology_hash(ontology)
+        ontology_version_id = _get_latest_ontology_version_id(project_id)
+        if ontology_version_id is None:
+            ontology_version_id = _create_ontology_version_if_possible(
+                project_id=project_id,
+                ontology=ontology,
+                source="original",
+            )
+        build_identity_key = _build_graph_identity_key(
+            project_id=project_id,
+            graph_backend=resolved_graph_backend,
+            chunk_mode=chunk_mode,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            source_text_hash=source_text_hash,
+            ontology_hash=ontology_hash,
+        )
+        batch_size = _resolve_graph_build_batch_size(data.get("batch_size"))
+
+        task_id = task_manager.create_task(
+            "graph_build",
+            metadata={
+                "project_id": project_id,
+                "graph_name": graph_name,
+                "graph_label": graph_label,
+                "graph_backend": resolved_graph_backend,
+                "chunk_mode": chunk_mode,
+                "chunk_size": chunk_size,
+                "chunk_overlap": chunk_overlap,
+                "batch_size": batch_size,
+                "override_graph": override_graph,
+                "enable_otel_tracing": enable_otel_tracing,
+                "enable_oracle_runtime_overrides": enable_oracle_runtime_overrides,
+                "oracle_pool_min": oracle_pool_min,
+                "oracle_pool_max": oracle_pool_max,
+                "oracle_pool_increment": oracle_pool_increment,
+                "oracle_max_coroutines": oracle_max_coroutines,
+                "graphiti_embedding_model": graphiti_embedding_model,
+                "source_text_hash": source_text_hash,
+                "ontology_hash": ontology_hash,
+                "ontology_version_id": ontology_version_id,
+                "build_identity_key": build_identity_key,
+            },
+        )
         logger.info(f"create build_graph task: task_id={task_id}, project_id={project_id}")
 
         project.status = ProjectStatus.GRAPH_BUILDING
@@ -580,48 +1554,156 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
             ProjectManager.save_project,
             project,
         )
+        if ProjectManager._use_postgres_storage():
+            try:
+                merge_project_data_json_fields(
+                    ProjectManager._get_storage_connection_string(),
+                    project_id=project_id,
+                    fields={
+                        "graph_build_task_id": task_id,
+                        "status": ProjectStatus.GRAPH_BUILDING.value,
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "merge_project_data_json_fields after new graph_build task failed project_id=%s task_id=%s",
+                    project_id,
+                    task_id,
+                )
+        batch_manager = BatchProcessManager()
 
         def build_task() -> None:
             build_logger = get_logger("z_graph.build")
             try:
                 build_logger.info(f"[{task_id}] Start building graph")
+                build_logger.info(
+                    "[%s] Using backend=%s graph_backend=%s project_id=%s build_identity=%s otel_tracing=%s",
+                    task_id,
+                    client_backend,
+                    resolved_graph_backend,
+                    project_id,
+                    build_identity_key,
+                    enable_otel_tracing,
+                )
+
                 task_manager.update_task(
                     task_id,
                     status=TaskStatus.PROCESSING,
                     message="Initializing graph build service",
                 )
+                if _is_task_cancelled(task_manager, task_id):
+                    raise TaskCancelledError("Task cancelled before graph build initialization")
 
-                build_logger.info(
-                    "[%s] Using backend=%s graph_backend=%s for project_id=%s",
-                    task_id,
-                    client_backend,
-                    resolved_graph_backend,
-                    project_id,
-                )
                 builder = GraphBuilderService(
                     backend=client_backend,
                     graph_backend=resolved_graph_backend,
+                    graphiti_embedding_model=graphiti_embedding_model,
                     api_key=Config.ZEP_API_KEY,
+                    project_id=str(project_id or "").strip() or None,
+                    enable_otel_tracing=enable_otel_tracing,
+                    oracle_pool_min=oracle_pool_min if resolved_graph_backend == GRAPH_BACKEND_ORACLE else None,
+                    oracle_pool_max=oracle_pool_max if resolved_graph_backend == GRAPH_BACKEND_ORACLE else None,
+                    oracle_pool_increment=oracle_pool_increment
+                    if resolved_graph_backend == GRAPH_BACKEND_ORACLE
+                    else None,
+                    oracle_max_coroutines=oracle_max_coroutines
+                    if resolved_graph_backend == GRAPH_BACKEND_ORACLE
+                    else None,
                 )
+
+                if override_graph and resolved_graph_id:
+                    task_manager.update_task(
+                        task_id,
+                        message=f"Override enabled: deleting graph '{resolved_graph_id}' first",
+                        progress=3,
+                    )
+                    try:
+                        builder.delete_graph(resolved_graph_id)
+                        build_logger.info(
+                            "[%s] Override delete completed: graph_id=%s",
+                            task_id,
+                            resolved_graph_id,
+                        )
+                    except Exception as delete_exc:
+                        if _looks_like_missing_graph_error(delete_exc):
+                            build_logger.info(
+                                "[%s] Override delete skipped, graph not found: graph_id=%s",
+                                task_id,
+                                resolved_graph_id,
+                            )
+                        else:
+                            raise
 
                 task_manager.update_task(
                     task_id,
                     message=f"Splitting Text ({chunk_mode} mode)",
                     progress=5,
                 )
+                if _is_task_cancelled(task_manager, task_id):
+                    raise TaskCancelledError("Task cancelled before chunk splitting")
+
+                split_chunk_size = chunk_size if chunk_size > 0 else DEFAULT_CHUNK_SIZE
+                split_chunk_overlap = chunk_overlap if chunk_overlap >= 0 else 0
                 chunks = split_text_with_mode(
                     text,
-                    chunk_size=chunk_size,
-                    overlap=chunk_overlap,
+                    chunk_size=split_chunk_size,
+                    overlap=split_chunk_overlap,
                     chunk_mode=chunk_mode,
                 )
                 total_chunks = len(chunks)
+                total_batches = (total_chunks + batch_size - 1) // batch_size if total_chunks > 0 else 0
 
-                task_manager.update_task(task_id, message="Creating Zep Graph", progress=10)
+                resume_context = batch_manager.resolve_resume_context(
+                    project_id=project_id,
+                    build_identity_key=build_identity_key,
+                    current_task_id=task_id,
+                    override_graph=override_graph,
+                    total_batches=total_batches,
+                )
+                run_graph_id = (
+                    str(resume_context.matched_graph_id or "").strip()
+                    or str(resolved_graph_id or "").strip()
+                    or None
+                )
+                build_logger.info(
+                    "[%s] build_identity=%s source_text_hash=%s ontology_hash=%s decision=%s start_batch=%s/%s previous_task_id=%s",
+                    task_id,
+                    build_identity_key,
+                    source_text_hash,
+                    ontology_hash,
+                    resume_context.resume_state,
+                    resume_context.start_batch_index,
+                    total_batches,
+                    resume_context.matched_task_id or "-",
+                )
+                task_manager.update_task(
+                    task_id,
+                    progress_detail={
+                        "build_identity_key": build_identity_key,
+                        "source_text_hash": source_text_hash,
+                        "ontology_hash": ontology_hash,
+                        "ontology_version_id": ontology_version_id,
+                        "resume_state": resume_context.resume_state,
+                        "matched_task_id": resume_context.matched_task_id or "",
+                        "last_completed_batch_index": max(-1, resume_context.start_batch_index - 1),
+                        "total_batches": total_batches,
+                        "total_chunks": total_chunks,
+                        "batch_size": batch_size,
+                    },
+                )
+
+                backend_display_name = _graph_backend_display_name(resolved_graph_backend)
+                task_manager.update_task(
+                    task_id,
+                    message=f"Creating {backend_display_name} graph",
+                    progress=10,
+                )
+                if _is_task_cancelled(task_manager, task_id):
+                    raise TaskCancelledError("Task cancelled before graph creation")
                 graph_id, project_workspace_id = builder.create_graph(
                     name=graph_name,
                     project_id=project_id,
-                    graph_id=resolved_graph_id,
+                    graph_id=run_graph_id,
                 )
 
                 project.zep_graph_id = graph_id
@@ -638,37 +1720,102 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                     project,
                 )
 
-                task_manager.update_task(task_id, message="Setting Ontology", progress=15)
+                task_manager.update_task(
+                    task_id,
+                    message="Setting Ontology",
+                    progress=15,
+                    progress_detail={
+                        "project_id": project_id,
+                        "graph_id": graph_id,
+                        "zep_graph_id": graph_id,
+                        "graph_label": graph_label or "",
+                        "project_workspace_id": project_workspace_id or "",
+                        "zep_graph_address": project.zep_graph_address or "",
+                        "graph_backend": resolved_graph_backend,
+                        "graphiti_embedding_model": graphiti_embedding_model,
+                        "graph_label": graph_label or "",
+                        "build_identity_key": build_identity_key,
+                        "source_text_hash": source_text_hash,
+                        "ontology_hash": ontology_hash,
+                        "ontology_version_id": ontology_version_id,
+                    },
+                )
                 builder.set_ontology(graph_id, ontology)
+                if _is_task_cancelled(task_manager, task_id):
+                    raise TaskCancelledError("Task cancelled after ontology setup")
 
                 def add_progress_callback(message: str, progress_ratio: float) -> None:
                     progress = 15 + int(progress_ratio * 40)
                     task_manager.update_task(task_id, message=message, progress=progress)
 
-                task_manager.update_task(
-                    task_id,
-                    message=f"Adding {total_chunks} chunks",
-                    progress=15,
-                )
+                def checkpoint_callback(batch_index: int, batch_count: int) -> None:
+                    checkpoint_payload = {
+                        "resume_state": resume_context.resume_state,
+                        "last_completed_batch_index": batch_index,
+                        "total_batches": batch_count,
+                        "total_chunks": total_chunks,
+                        "batch_size": batch_size,
+                    }
+                    task_manager.update_task(task_id, progress_detail=checkpoint_payload)
+                    batch_manager.persist_checkpoint(
+                        task_id=task_id,
+                        batch_index=batch_index,
+                        total_batches=batch_count,
+                        total_chunks=total_chunks,
+                        batch_size=batch_size,
+                        resume_state=resume_context.resume_state,
+                    )
+
+                if resume_context.start_batch_index > 0:
+                    task_manager.update_task(
+                        task_id,
+                        message=(
+                            f"Resuming build from batch {resume_context.start_batch_index + 1}/{total_batches}"
+                        ),
+                        progress=20,
+                    )
+                else:
+                    task_manager.update_task(
+                        task_id,
+                        message=f"Adding {total_chunks} chunks",
+                        progress=15,
+                    )
+
                 episode_uuids = builder.add_text_batches(
                     graph_id,
                     chunks,
-                    batch_size=3,
+                    batch_size=batch_size,
                     progress_callback=add_progress_callback,
+                    checkpoint_callback=checkpoint_callback,
+                    start_batch_index=resume_context.start_batch_index,
+                    should_stop=lambda: _is_task_cancelled(task_manager, task_id),
                 )
 
-                task_manager.update_task(task_id, message="Waiting for Zep to process data", progress=45)
+                task_manager.update_task(
+                    task_id,
+                    message=f"Waiting for {backend_display_name} to process data",
+                    progress=45,
+                )
 
                 def wait_progress_callback(message: str, progress_ratio: float) -> None:
                     progress = 55 + int(progress_ratio * 35)
                     task_manager.update_task(task_id, message=message, progress=progress)
 
-                builder._wait_for_episodes(episode_uuids, wait_progress_callback)
+                builder._wait_for_episodes(
+                    episode_uuids,
+                    wait_progress_callback,
+                    should_stop=lambda: _is_task_cancelled(task_manager, task_id),
+                )
+                if _is_task_cancelled(task_manager, task_id):
+                    raise TaskCancelledError("Task cancelled before graph data fetch")
 
                 task_manager.update_task(task_id, message="Getting Graph Data", progress=90)
                 graph_data = builder.get_graph_data(graph_id, include_episode_data=False)
+                if _is_task_cancelled(task_manager, task_id):
+                    raise TaskCancelledError("Task cancelled before completion")
 
                 project.status = ProjectStatus.GRAPH_COMPLETED
+                project.has_built_graph = True
                 _timed_task_call(
                     task_manager,
                     task_id,
@@ -681,7 +1828,11 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                 node_count = graph_data.get("node_count", 0)
                 edge_count = graph_data.get("edge_count", 0)
                 build_logger.info(
-                    f"[{task_id}] Graph Build Completed: graph_id={graph_id}, nodes={node_count}, edges={edge_count}"
+                    "[%s] Graph Build Completed: graph_id=%s, nodes=%s, edges=%s",
+                    task_id,
+                    graph_id,
+                    node_count,
+                    edge_count,
                 )
 
                 task_manager.update_task(
@@ -689,17 +1840,56 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                     status=TaskStatus.COMPLETED,
                     message="Graph Build Completed",
                     progress=100,
+                    progress_detail={
+                        "resume_state": "completed",
+                        "last_completed_batch_index": max(-1, total_batches - 1),
+                        "total_batches": total_batches,
+                        "total_chunks": total_chunks,
+                        "batch_size": batch_size,
+                    },
                     result={
                         "project_id": project_id,
                         "zep_graph_id": graph_id,
                         "graph_backend": resolved_graph_backend,
+                        "graphiti_embedding_model": graphiti_embedding_model,
+                        "graph_label": graph_label or "",
                         "chunk_mode": chunk_mode,
+                        "chunk_size": chunk_size,
+                        "chunk_overlap": chunk_overlap,
+                        "source_text_hash": source_text_hash,
+                        "ontology_hash": ontology_hash,
+                        "ontology_version_id": ontology_version_id,
+                        "build_identity_key": build_identity_key,
+                        "batch_size": batch_size,
+                        "total_chunks": total_chunks,
+                        "total_batches": total_batches,
+                        "last_completed_batch_index": max(-1, total_batches - 1),
+                        "resume_state": "completed",
                         "project_workspace_id": project_workspace_id,
                         "zep_graph_address": project.zep_graph_address,
                         "node_count": node_count,
                         "edge_count": edge_count,
                         "chunk_count": total_chunks,
                     },
+                )
+            except TaskCancelledError:
+                build_logger.info("[%s] Graph Build Cancelled", task_id)
+                task_manager.update_task(
+                    task_id,
+                    status=TaskStatus.CANCELLED,
+                    message="Graph build cancelled by user",
+                    progress_detail={"resume_state": "cancelled"},
+                )
+                project.status = ProjectStatus.ONTOLOGY_GENERATED
+                project.graph_build_task_id = None
+                project.error = None
+                _timed_task_call(
+                    task_manager,
+                    task_id,
+                    "step_b",
+                    "ProjectManager.save_project",
+                    ProjectManager.save_project,
+                    project,
                 )
             except Exception as exc:
                 build_logger.error(f"[{task_id}] Graph Build Failed: {exc}")
@@ -721,6 +1911,7 @@ def build_graph(data: dict[str, Any] = Body(default_factory=dict)) -> Any:
                     status=TaskStatus.FAILED,
                     message=f"Graph Build Failed: {exc}",
                     error=traceback.format_exc(),
+                    progress_detail={"resume_state": "failed"},
                 )
 
         thread = threading.Thread(target=build_task, daemon=True)
@@ -750,6 +1941,30 @@ def get_task(task_id: str) -> Any:
     }
 
 
+@router.post("/task/{task_id}/cancel")
+def cancel_task(task_id: str) -> Any:
+    task_manager = TaskManager()
+    task = task_manager.get_task(task_id)
+    if not task:
+        return _error_response(404, f"Task not found: {task_id}")
+    if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}:
+        return {
+            "success": True,
+            "message": f"Task already finished: {task.status.value}",
+            "data": task.to_dict(),
+        }
+
+    cancelled = task_manager.cancel_task(task_id, message="Task cancellation requested by user")
+    updated_task = task_manager.get_task(task_id)
+    if not cancelled or not updated_task:
+        return _error_response(400, f"Task cannot be cancelled: {task_id}")
+    return {
+        "success": True,
+        "message": f"Task cancellation requested: {task_id}",
+        "data": updated_task.to_dict(),
+    }
+
+
 @router.get("/tasks")
 def list_tasks() -> dict[str, Any]:
     tasks = TaskManager().list_tasks()
@@ -772,10 +1987,17 @@ def get_graph_data(
         normalized_workspace_id = str(project_workspace_id or "").strip() or None
         normalized_project_id = str(project_id or "").strip()
         project_graph_backend = ""
+        project_oracle_runtime = {
+            "oracle_pool_min": _coerce_optional_positive_int(Config.ORACLE_POOL_MIN),
+            "oracle_pool_max": _coerce_optional_positive_int(Config.ORACLE_POOL_MAX),
+            "oracle_pool_increment": _coerce_optional_positive_int(Config.ORACLE_POOL_INCREMENT),
+            "oracle_max_coroutines": _coerce_optional_positive_int(Config.ORACLE_MAX_COROUTINES),
+        }
         if normalized_project_id:
             project = ProjectManager.get_project(normalized_project_id)
             if project is not None:
                 project_graph_backend = str(getattr(project, "graph_backend", "") or "")
+                project_oracle_runtime = _resolve_oracle_runtime_settings(project)
 
         requested_graph_backend = _normalize_graph_backend(graph_backend)
         resolved_graph_backend = _resolve_graph_backend(
@@ -795,12 +2017,32 @@ def get_graph_data(
                 project_graph_backend,
             )
         primary_backend = _client_backend_for_graph_backend(resolved_graph_backend)
+        oracle_project_error = _require_project_id_for_oracle_backend(
+            resolved_graph_backend,
+            normalized_project_id,
+            route_name="/api/data/{graph_id}",
+        )
+        if oracle_project_error is not None:
+            return oracle_project_error
 
         def _load_graph_data(selected_backend: str, selected_graph_backend: str) -> dict[str, Any]:
             builder = GraphBuilderService(
                 backend=selected_backend,
                 graph_backend=selected_graph_backend,
                 api_key=Config.ZEP_API_KEY,
+                project_id=normalized_project_id or None,
+                oracle_pool_min=project_oracle_runtime["oracle_pool_min"]
+                if selected_graph_backend == GRAPH_BACKEND_ORACLE
+                else None,
+                oracle_pool_max=project_oracle_runtime["oracle_pool_max"]
+                if selected_graph_backend == GRAPH_BACKEND_ORACLE
+                else None,
+                oracle_pool_increment=project_oracle_runtime["oracle_pool_increment"]
+                if selected_graph_backend == GRAPH_BACKEND_ORACLE
+                else None,
+                oracle_max_coroutines=project_oracle_runtime["oracle_max_coroutines"]
+                if selected_graph_backend == GRAPH_BACKEND_ORACLE
+                else None,
             )
             return builder.get_graph_data(
                 graph_id,
@@ -840,10 +2082,17 @@ def delete_graph(
 
         normalized_project_id = str(project_id or "").strip()
         project_graph_backend = ""
+        project_oracle_runtime = {
+            "oracle_pool_min": _coerce_optional_positive_int(Config.ORACLE_POOL_MIN),
+            "oracle_pool_max": _coerce_optional_positive_int(Config.ORACLE_POOL_MAX),
+            "oracle_pool_increment": _coerce_optional_positive_int(Config.ORACLE_POOL_INCREMENT),
+            "oracle_max_coroutines": _coerce_optional_positive_int(Config.ORACLE_MAX_COROUTINES),
+        }
         if normalized_project_id:
             project = ProjectManager.get_project(normalized_project_id)
             if project is not None:
                 project_graph_backend = str(getattr(project, "graph_backend", "") or "")
+                project_oracle_runtime = _resolve_oracle_runtime_settings(project)
         requested_graph_backend = _normalize_graph_backend(graph_backend)
         resolved_graph_backend = _resolve_graph_backend(project_graph_backend, requested_graph_backend)
         if (
@@ -857,11 +2106,31 @@ def delete_graph(
                 normalized_project_id,
                 project_graph_backend,
             )
+        oracle_project_error = _require_project_id_for_oracle_backend(
+            resolved_graph_backend,
+            normalized_project_id,
+            route_name="/api/delete/{graph_id}",
+        )
+        if oracle_project_error is not None:
+            return oracle_project_error
 
         builder = GraphBuilderService(
             backend=_client_backend_for_graph_backend(resolved_graph_backend),
             graph_backend=resolved_graph_backend,
             api_key=Config.ZEP_API_KEY,
+            project_id=normalized_project_id or None,
+            oracle_pool_min=project_oracle_runtime["oracle_pool_min"]
+            if resolved_graph_backend == GRAPH_BACKEND_ORACLE
+            else None,
+            oracle_pool_max=project_oracle_runtime["oracle_pool_max"]
+            if resolved_graph_backend == GRAPH_BACKEND_ORACLE
+            else None,
+            oracle_pool_increment=project_oracle_runtime["oracle_pool_increment"]
+            if resolved_graph_backend == GRAPH_BACKEND_ORACLE
+            else None,
+            oracle_max_coroutines=project_oracle_runtime["oracle_max_coroutines"]
+            if resolved_graph_backend == GRAPH_BACKEND_ORACLE
+            else None,
         )
         builder.delete_graph(graph_id)
         return {

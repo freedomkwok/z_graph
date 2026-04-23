@@ -1,0 +1,5 @@
+- Person
+- ChatParticipant
+- AIConsultant
+- CompanyRepresentative
+- Entrepreneur

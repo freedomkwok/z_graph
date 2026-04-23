@@ -1,0 +1,6 @@
+- Organization
+- Company
+- ManufacturingCompany
+- ITTeam
+- OpenSourceProject
+- Canon

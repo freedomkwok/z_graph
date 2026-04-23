@@ -228,7 +228,9 @@ const normalizePromptLabelTypeListValues = (values) => {
   const nextValues = [];
   const seen = new Set();
   for (const value of Array.isArray(values) ? values : []) {
-    const normalized = String(value ?? "").trim();
+    const normalized = String(value ?? "")
+      .trim()
+      .replace(/\s+/g, " ");
     if (!normalized) continue;
     const dedupeKey = normalized.toLowerCase();
     if (seen.has(dedupeKey)) continue;
@@ -246,6 +248,28 @@ const normalizePromptLabelTypeListsPayload = (value) => ({
   relationship: normalizePromptLabelTypeListValues(value?.relationship),
   relationship_exception: normalizePromptLabelTypeListValues(value?.relationship_exception),
 });
+
+const mergePromptLabelTypeLists = (existingValue, incomingValue) => {
+  const existing = normalizePromptLabelTypeListsPayload(existingValue);
+  const incoming = normalizePromptLabelTypeListsPayload(incomingValue);
+  return {
+    individual: normalizePromptLabelTypeListValues([...existing.individual, ...incoming.individual]),
+    individual_exception: normalizePromptLabelTypeListValues([
+      ...existing.individual_exception,
+      ...incoming.individual_exception,
+    ]),
+    organization: normalizePromptLabelTypeListValues([...existing.organization, ...incoming.organization]),
+    organization_exception: normalizePromptLabelTypeListValues([
+      ...existing.organization_exception,
+      ...incoming.organization_exception,
+    ]),
+    relationship: normalizePromptLabelTypeListValues([...existing.relationship, ...incoming.relationship]),
+    relationship_exception: normalizePromptLabelTypeListValues([
+      ...existing.relationship_exception,
+      ...incoming.relationship_exception,
+    ]),
+  };
+};
 
 const removeCrossListDuplicates = (typeName, values, allTypeLists) => {
   const pairedField = PROMPT_LABEL_FIELD_PAIR_MAP[typeName];
@@ -322,6 +346,82 @@ const remapTypeDefinitions = (existingDefinitions, nextNames, mode) => {
     .filter(Boolean);
 };
 
+const canonicalJson = (value) => JSON.stringify(value ?? {}, Object.keys(value ?? {}).sort());
+
+const mergeJsonObjects = (baseValues, incomingValues) => {
+  const merged = [];
+  const seen = new Set();
+  for (const value of [...(Array.isArray(baseValues) ? baseValues : []), ...(Array.isArray(incomingValues) ? incomingValues : [])]) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const key = canonicalJson(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(value);
+  }
+  return merged;
+};
+
+const mergeSourceTargets = (baseValues, incomingValues) => {
+  const merged = [];
+  const seen = new Set();
+  for (const value of [...(Array.isArray(baseValues) ? baseValues : []), ...(Array.isArray(incomingValues) ? incomingValues : [])]) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const source = String(value.source ?? "").trim();
+    const target = String(value.target ?? "").trim();
+    if (!source || !target) continue;
+    const key = `${source.toLowerCase()}::${target.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push({ source, target });
+  }
+  return merged;
+};
+
+const mergeTypeDefinition = (target, incoming, mode) => {
+  if (mode === "entity") {
+    return sanitizeEntityTypeDraft({
+      ...target,
+      name: normalizeTypeTag(target?.name || incoming?.name),
+      description: String(target?.description || incoming?.description || ""),
+      examples: normalizeStringList([...(target?.examples ?? []), ...(incoming?.examples ?? [])]),
+      attributes: mergeJsonObjects(target?.attributes, incoming?.attributes),
+    });
+  }
+  return sanitizeRelationshipTypeDraft({
+    ...target,
+    name: normalizeTypeTag(target?.name || incoming?.name),
+    description: String(target?.description || incoming?.description || ""),
+    attributes: mergeJsonObjects(target?.attributes, incoming?.attributes),
+    source_targets: mergeSourceTargets(target?.source_targets, incoming?.source_targets),
+  });
+};
+
+const hasTypeDefinitionChanged = (base, next, mode) => {
+  if (!base || !next) return false;
+  const normalizedBase =
+    mode === "entity" ? sanitizeEntityTypeDraft(base) : sanitizeRelationshipTypeDraft(base);
+  const normalizedNext =
+    mode === "entity" ? sanitizeEntityTypeDraft(next) : sanitizeRelationshipTypeDraft(next);
+  if (!normalizedBase || !normalizedNext) return false;
+  return canonicalJson(normalizedBase) !== canonicalJson(normalizedNext);
+};
+
+const findTypeDefinitionByName = (definitions, name) => {
+  const lookup = normalizeTypeKey(name);
+  return (Array.isArray(definitions) ? definitions : []).find(
+    (item) => normalizeTypeKey(item?.name) === lookup,
+  );
+};
+
+const buildOntologyFromDrafts = (entityTypes, edgeTypes) => ({
+  entity_types: (Array.isArray(entityTypes) ? entityTypes : [])
+    .map((item) => sanitizeEntityTypeDraft(item))
+    .filter(Boolean),
+  edge_types: (Array.isArray(edgeTypes) ? edgeTypes : [])
+    .map((item) => sanitizeRelationshipTypeDraft(item))
+    .filter(Boolean),
+});
+
 export {
   PROMPT_LABEL_REQUIRED_VALUES,
   PROMPT_LABEL_FIELD_PAIR_MAP,
@@ -332,6 +432,7 @@ export {
   createEmptyPromptLabelTypeLists,
   createPromptLabelTypeCollapseState,
   extractOntologyTypeDrafts,
+  mergePromptLabelTypeLists,
   normalizePromptLabelTypeListValues,
   normalizePromptLabelTypeListsPayload,
   normalizeStringList,
@@ -342,4 +443,8 @@ export {
   enforceRequiredPromptLabelValues,
   sanitizeEntityTypeDraft,
   sanitizeRelationshipTypeDraft,
+  mergeTypeDefinition,
+  hasTypeDefinitionChanged,
+  findTypeDefinitionByName,
+  buildOntologyFromDrafts,
 };

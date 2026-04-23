@@ -66,7 +66,9 @@ const normalizePromptLabelTypeListValues = (values) => {
   const nextValues = [];
   const seen = new Set();
   for (const value of Array.isArray(values) ? values : []) {
-    const normalized = String(value ?? "").trim();
+    const normalized = String(value ?? "")
+      .trim()
+      .replace(/\s+/g, " ");
     if (!normalized) continue;
     const dedupeKey = normalized.toLowerCase();
     if (seen.has(dedupeKey)) continue;
@@ -84,6 +86,28 @@ const normalizePromptLabelTypeListsPayload = (value) => ({
   relationship: normalizePromptLabelTypeListValues(value?.relationship),
   relationship_exception: normalizePromptLabelTypeListValues(value?.relationship_exception),
 });
+
+const mergePromptLabelTypeLists = (existingValue, incomingValue) => {
+  const existing = normalizePromptLabelTypeListsPayload(existingValue);
+  const incoming = normalizePromptLabelTypeListsPayload(incomingValue);
+  return {
+    individual: normalizePromptLabelTypeListValues([...existing.individual, ...incoming.individual]),
+    individual_exception: normalizePromptLabelTypeListValues([
+      ...existing.individual_exception,
+      ...incoming.individual_exception,
+    ]),
+    organization: normalizePromptLabelTypeListValues([...existing.organization, ...incoming.organization]),
+    organization_exception: normalizePromptLabelTypeListValues([
+      ...existing.organization_exception,
+      ...incoming.organization_exception,
+    ]),
+    relationship: normalizePromptLabelTypeListValues([...existing.relationship, ...incoming.relationship]),
+    relationship_exception: normalizePromptLabelTypeListValues([
+      ...existing.relationship_exception,
+      ...incoming.relationship_exception,
+    ]),
+  };
+};
 
 const removeCrossListDuplicates = (typeName, values, allTypeLists) => {
   const pairedField = PROMPT_LABEL_FIELD_PAIR_MAP[typeName];
@@ -191,6 +215,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
     promptTemplateHeights: createDefaultPromptTemplateHeights(),
     promptTemplatePreviewModes: createDefaultPromptTemplatePreviewModes(),
     collapsedTypeSections: createPromptLabelTypeCollapseState(),
+    keepRemainingOnGenerate: false,
     notice: "",
     error: "",
   });
@@ -287,6 +312,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       promptTemplateHeights: createDefaultPromptTemplateHeights(),
       promptTemplatePreviewModes: createDefaultPromptTemplatePreviewModes(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
+      keepRemainingOnGenerate: false,
       notice: "",
       error: "",
     });
@@ -314,6 +340,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       promptTemplateHeights: createDefaultPromptTemplateHeights(),
       promptTemplatePreviewModes: createDefaultPromptTemplatePreviewModes(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
+      keepRemainingOnGenerate: false,
       notice: "",
       error: "",
     });
@@ -343,6 +370,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       promptTemplateHeights: createDefaultPromptTemplateHeights(),
       promptTemplatePreviewModes: createDefaultPromptTemplatePreviewModes(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
+      keepRemainingOnGenerate: false,
       notice: "",
       error: "",
     });
@@ -396,6 +424,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
       promptTemplateHeights: createDefaultPromptTemplateHeights(),
       promptTemplatePreviewModes: createDefaultPromptTemplatePreviewModes(),
       collapsedTypeSections: createPromptLabelTypeCollapseState(),
+      keepRemainingOnGenerate: false,
       notice: "",
       error: "",
     });
@@ -541,7 +570,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
     }));
     try {
       await updatePromptLabelPromptTemplate(labelName, activeTab, content);
-      await fetchPromptLabels({ syncFormLabel: false });
+      await fetchPromptLabels({ syncFormLabel: false, skipDedup: true });
       setPromptLabelEditor((current) => ({
         ...current,
         updatingPromptTemplateKey: "",
@@ -665,7 +694,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
         await updatePromptLabelTypeLists(labelName, payload);
       }
 
-      await fetchPromptLabels({ syncFormLabel: false });
+      await fetchPromptLabels({ syncFormLabel: false, skipDedup: true });
       setPromptLabelEditor({
         open: false,
         labelName: "",
@@ -829,7 +858,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
           throw new Error("Label name is required.");
         }
         const result = await syncPromptLabelPromptTemplateFromDefault(labelName, activeTab);
-        await fetchPromptLabels({ syncFormLabel: false });
+        await fetchPromptLabels({ syncFormLabel: false, skipDedup: true });
         setPromptLabelEditor((current) => ({
           ...current,
           syncing: false,
@@ -946,6 +975,9 @@ export default function PromptLabelManagementPage({ onNavigate }) {
           projectName: state.form?.projectName,
           promptLabel: state.form?.promptLabel,
           graphBackend: state.form?.graphBackend,
+          usePdfPageRange: state.form?.usePdfPageRange,
+          pdfPageFrom: state.form?.pdfPageFrom,
+          pdfPageTo: state.form?.pdfPageTo,
           files: state.form?.files,
         });
         const draftProjectId = String(draftProject?.project_id ?? "").trim();
@@ -958,15 +990,23 @@ export default function PromptLabelManagementPage({ onNavigate }) {
 
       const generatedResult = await generatePromptLabelTypeListsFromLlm(labelName, {
         projectId: resolvedProjectId,
+        usePdfPageRange: state.form?.usePdfPageRange,
+        pdfPageFrom: state.form?.pdfPageFrom,
+        pdfPageTo: state.form?.pdfPageTo,
         entityEdgeGeneratorPromptContent: entityEdgeGeneratorPromptOverride,
       });
       const processedDocuments = Number(generatedResult?.processed_documents ?? 0);
+      const generatedTypeLists = normalizePromptLabelTypeListsPayload(generatedResult?.types);
       setPromptLabelEditor((current) => ({
         ...current,
         generatingFromLlm: false,
         typesDraftTouched: false,
-        typeLists: normalizePromptLabelTypeListsPayload(generatedResult?.types),
-        notice: `Generated from LLM using ${processedDocuments} document${processedDocuments === 1 ? "" : "s"}. Review and save.`,
+        typeLists: current.keepRemainingOnGenerate
+          ? mergePromptLabelTypeLists(current.typeLists, generatedTypeLists)
+          : generatedTypeLists,
+        notice: current.keepRemainingOnGenerate
+          ? `Generated from LLM using ${processedDocuments} document${processedDocuments === 1 ? "" : "s"} and kept existing loaded items. Review and save.`
+          : `Generated from LLM using ${processedDocuments} document${processedDocuments === 1 ? "" : "s"}. Review and save.`,
         error: "",
       }));
     } catch (error) {
@@ -1105,7 +1145,7 @@ export default function PromptLabelManagementPage({ onNavigate }) {
                 className="icon-btn"
                 type="button"
                 title="Refresh labels"
-                onClick={() => fetchPromptLabels({ syncFormLabel: false })}
+                onClick={() => fetchPromptLabels({ syncFormLabel: false, skipDedup: true })}
               >
                 ↻
               </button>
@@ -1470,93 +1510,121 @@ export default function PromptLabelManagementPage({ onNavigate }) {
             </div>
             {promptLabelEditor.notice && <p className="status-line">{promptLabelEditor.notice}</p>}
             {promptLabelEditor.error && <p className="ontology-editor-error">{promptLabelEditor.error}</p>}
-            <div className="ontology-editor-actions">
-              <button
-                className="ontology-editor-cancel-btn"
-                type="button"
-                onClick={closePromptLabelEditor}
-                disabled={
-                  promptLabelEditor.loadingTypes ||
-                  promptLabelEditor.loadingPromptTemplate ||
-                  promptLabelEditor.syncing ||
-                  promptLabelEditor.generatingFromLlm ||
-                  promptLabelEditor.savingTypes ||
-                  Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim())
-                }
-              >
-                Cancel
-              </button>
-              <button
-                className="ontology-editor-cancel-btn"
-                type="button"
-                onClick={syncPromptLabelContent}
-                disabled={
-                  promptLabelEditor.loadingTypes ||
-                  promptLabelEditor.loadingPromptTemplate ||
-                  promptLabelEditor.syncing ||
-                  promptLabelEditor.generatingFromLlm ||
-                  promptLabelEditor.savingTypes ||
-                  Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim())
-                }
-              >
-                {promptLabelEditor.syncing ? "Syncing..." : "Sync From Default"}
-              </button>
-              {promptLabelEditor.isNewLabel && activeTopPromptLabelEditorTab === "node_edges" && (
+            <div className="ontology-editor-actions prompt-label-editor-actions">
+              {activeTopPromptLabelEditorTab === "node_edges" && (
+                <div className="prompt-label-editor-actions-row prompt-label-editor-actions-row-top">
+                  <label className="prompt-label-keep-remain-toggle">
+                    <span className="prompt-label-keep-remain-text">Keep Remain</span>
+                    <span className="prompt-label-slider-switch">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(promptLabelEditor.keepRemainingOnGenerate)}
+                        onChange={(event) =>
+                          setPromptLabelEditor((current) => ({
+                            ...current,
+                            keepRemainingOnGenerate: event.target.checked,
+                          }))
+                        }
+                        disabled={
+                          promptLabelEditor.loadingTypes ||
+                          promptLabelEditor.loadingPromptTemplate ||
+                          promptLabelEditor.syncing ||
+                          promptLabelEditor.generatingFromLlm ||
+                          promptLabelEditor.savingTypes ||
+                          Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim())
+                        }
+                      />
+                      <span className="prompt-label-slider-track" />
+                    </span>
+                  </label>
+                  <button
+                    className="ontology-editor-cancel-btn"
+                    type="button"
+                    onClick={generateNewPromptLabelFromLlm}
+                    disabled={
+                      promptLabelEditor.loadingTypes ||
+                      promptLabelEditor.loadingPromptTemplate ||
+                      promptLabelEditor.syncing ||
+                      promptLabelEditor.generatingFromLlm ||
+                      promptLabelEditor.savingTypes ||
+                      Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim()) ||
+                      !canGenerateFromLlm
+                    }
+                    title={generateFromLlmHelpText}
+                  >
+                    {promptLabelEditor.generatingFromLlm ? "Generating..." : "Generate From LLM"}
+                  </button>
+                </div>
+              )}
+              <div className="prompt-label-editor-actions-row prompt-label-editor-actions-row-bottom">
                 <button
                   className="ontology-editor-cancel-btn"
                   type="button"
-                  onClick={generateNewPromptLabelFromLlm}
+                  onClick={closePromptLabelEditor}
                   disabled={
                     promptLabelEditor.loadingTypes ||
                     promptLabelEditor.loadingPromptTemplate ||
                     promptLabelEditor.syncing ||
                     promptLabelEditor.generatingFromLlm ||
                     promptLabelEditor.savingTypes ||
-                    Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim()) ||
-                    !canGenerateFromLlm
+                    Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim())
                   }
-                  title={generateFromLlmHelpText}
                 >
-                  {promptLabelEditor.generatingFromLlm ? "Generating..." : "Generate From LLM"}
+                  Cancel
                 </button>
-              )}
-              <button
-                className="ontology-editor-cancel-btn"
-                type="button"
-                onClick={revertPromptLabelEditorToDefault}
-                disabled={
-                  promptLabelEditor.loadingTypes ||
-                  promptLabelEditor.loadingPromptTemplate ||
-                  promptLabelEditor.syncing ||
-                  promptLabelEditor.generatingFromLlm ||
-                  promptLabelEditor.savingTypes ||
-                  Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim())
-                }
-              >
-                Revert to Default
-              </button>
-              <button
-                className="action-btn"
-                type="button"
-                onClick={savePromptLabelTypeLists}
-                disabled={
-                  promptLabelEditor.syncing ||
-                  promptLabelEditor.loadingPromptTemplate ||
-                  promptLabelEditor.generatingFromLlm ||
-                  promptLabelEditor.savingTypes ||
-                  Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim()) ||
-                  (promptLabelEditor.isNewLabel && activePromptLabelEditorTab !== "node_edges_content") ||
-                  !String(promptLabelEditor.labelName ?? "").trim()
-                }
-              >
-                {promptLabelEditor.savingTypes
-                  ? promptLabelEditor.isNewLabel
-                    ? "Creating..."
-                    : "Saving..."
-                  : promptLabelEditor.isNewLabel
-                    ? "Create Label"
-                    : "Save Label"}
-              </button>
+                <button
+                  className="ontology-editor-cancel-btn"
+                  type="button"
+                  onClick={revertPromptLabelEditorToDefault}
+                  disabled={
+                    promptLabelEditor.loadingTypes ||
+                    promptLabelEditor.loadingPromptTemplate ||
+                    promptLabelEditor.syncing ||
+                    promptLabelEditor.generatingFromLlm ||
+                    promptLabelEditor.savingTypes ||
+                    Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim())
+                  }
+                >
+                  Revert to Default
+                </button>
+                <button
+                  className="ontology-editor-cancel-btn"
+                  type="button"
+                  onClick={syncPromptLabelContent}
+                  disabled={
+                    promptLabelEditor.loadingTypes ||
+                    promptLabelEditor.loadingPromptTemplate ||
+                    promptLabelEditor.syncing ||
+                    promptLabelEditor.generatingFromLlm ||
+                    promptLabelEditor.savingTypes ||
+                    Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim())
+                  }
+                >
+                  {promptLabelEditor.syncing ? "Syncing..." : "Sync From Default"}
+                </button>
+                <button
+                  className="action-btn"
+                  type="button"
+                  onClick={savePromptLabelTypeLists}
+                  disabled={
+                    promptLabelEditor.syncing ||
+                    promptLabelEditor.loadingPromptTemplate ||
+                    promptLabelEditor.generatingFromLlm ||
+                    promptLabelEditor.savingTypes ||
+                    Boolean(String(promptLabelEditor.updatingPromptTemplateKey ?? "").trim()) ||
+                    (promptLabelEditor.isNewLabel && activePromptLabelEditorTab !== "node_edges_content") ||
+                    !String(promptLabelEditor.labelName ?? "").trim()
+                  }
+                >
+                  {promptLabelEditor.savingTypes
+                    ? promptLabelEditor.isNewLabel
+                      ? "Creating..."
+                      : "Saving..."
+                    : promptLabelEditor.isNewLabel
+                      ? "Create Label"
+                      : "Save Label"}
+                </button>
+              </div>
             </div>
           </article>
         </div>
