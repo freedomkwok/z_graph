@@ -367,9 +367,13 @@ class GraphitiClient(ZepClientAdapter):
         edges: Optional[Dict[str, Any]] = None
     ) -> None:
         for graph_id in graph_ids:
-            self._set_cached_ontology(graph_id, entities, edges)
+            normalized_graph_id = self._normalize_graph_id(graph_id)
+            if not normalized_graph_id:
+                continue
+
+            self._set_cached_ontology(normalized_graph_id, entities, edges)
             logger.info(
-                f"Ontology has been cached (MVP no-op): graph_id={graph_id}, "
+                f"Ontology has been cached (MVP no-op): graph_id={normalized_graph_id}, "
                 f"entity_types={len(entities or {})}, edge_types={len(edges or {})}"
             )
 

@@ -350,13 +350,13 @@ class GraphBuilderService:
             if source_targets:
                 edge_definitions[name] = (edge_class, source_targets)
 
-        # Call Zep to set ontology
-        if entity_types or edge_definitions:
-            self.client.set_ontology(
-                graph_ids=[graph_id],
-                entities=entity_types if entity_types else None,
-                edges=edge_definitions if edge_definitions else None,
-            )
+        # Always propagate ontology state so Graphiti in-memory cache is write-through,
+        # including explicit empty ontology updates for a graph_id.
+        self.client.set_ontology(
+            graph_ids=[graph_id],
+            entities=entity_types if entity_types else None,
+            edges=edge_definitions if edge_definitions else None,
+        )
 
     def add_text_batches(
         self,
