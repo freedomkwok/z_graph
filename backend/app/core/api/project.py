@@ -649,267 +649,6 @@ def _build_project_response_data(project: Any) -> dict[str, Any]:
     return project_data
 
 
-_graphiti_warmup_state_lock = threading.Lock()
-_graphiti_warmup_inflight: set[str] = set()
-_graphiti_warmup_recent_completed: dict[str, float] = {}
-
-
-def _collect_graphiti_warmup_context(
-    project: Any,
-    *,
-    graph_ids: list[str] | None = None,
-) -> dict[str, Any] | None:
-    ontology = getattr(project, "ontology", None)
-    if not isinstance(ontology, dict) or not ontology:
-        return None
-
-    graph_backend = _normalize_graph_backend(getattr(project, "graph_backend", None))
-    if graph_backend not in GRAPHITI_BACKENDS:
-        return None
-
-    project_id = str(getattr(project, "project_id", "") or "").strip()
-    if not project_id:
-        return None
-
-    candidate_graph_ids: list[str] = []
-    if graph_ids:
-        candidate_graph_ids = [str(graph_id or "").strip() for graph_id in graph_ids]
-    else:
-        candidate_graph_ids = [
-            str(getattr(project, "zep_graph_id", "") or "").strip(),
-            project_id,
-        ]
-    unique_graph_ids = [graph_id for graph_id in dict.fromkeys(candidate_graph_ids) if graph_id]
-    if not unique_graph_ids:
-        return None
-
-    return {
-        "project_id": project_id,
-        "ontology": ontology,
-        "ontology_hash": _compute_ontology_hash(ontology),
-        "graph_backend": graph_backend,
-        "graphiti_embedding_model": _resolve_graphiti_embedding_model(
-            getattr(project, "graphiti_embedding_model", None)
-        ),
-        "oracle_runtime": _resolve_oracle_runtime_settings(project),
-        "graph_ids": unique_graph_ids,
-    }
-
-
-def _claim_graphiti_warmup_key(key: str, ttl_seconds: int) -> bool:
-    now = time.monotonic()
-    with _graphiti_warmup_state_lock:
-        expired = [
-            dedupe_key
-            for dedupe_key, finished_at in _graphiti_warmup_recent_completed.items()
-            if now - finished_at >= ttl_seconds
-        ]
-        for expired_key in expired:
-            _graphiti_warmup_recent_completed.pop(expired_key, None)
-
-        if key in _graphiti_warmup_inflight:
-            return False
-        last_finished_at = _graphiti_warmup_recent_completed.get(key)
-        if last_finished_at is not None and now - last_finished_at < ttl_seconds:
-            return False
-        _graphiti_warmup_inflight.add(key)
-    return True
-
-
-def _release_graphiti_warmup_key(key: str) -> None:
-    with _graphiti_warmup_state_lock:
-        _graphiti_warmup_inflight.discard(key)
-        _graphiti_warmup_recent_completed[key] = time.monotonic()
-
-
-def _set_ontology_with_timeout(
-    builder: GraphBuilderService,
-    graph_id: str,
-    ontology: dict[str, Any],
-    timeout_seconds: float,
-) -> tuple[bool, Exception | None]:
-    result: dict[str, Exception | None] = {"error": None}
-    finished_event = threading.Event()
-
-    def _invoke() -> None:
-        try:
-            builder.set_ontology(graph_id, ontology)
-        except Exception as exc:  # pragma: no cover
-            result["error"] = exc
-        finally:
-            finished_event.set()
-
-    thread = threading.Thread(target=_invoke, daemon=True, name=f"warmup-set-ontology-{graph_id}")
-    thread.start()
-    completed = finished_event.wait(timeout_seconds)
-    if not completed:
-        return False, TimeoutError(
-            f"Timed out after {timeout_seconds:.2f}s while warming graph ontology cache"
-        )
-    return True, result["error"]
-
-
-def _warm_graphiti_ontology_cache_worker(
-    *,
-    project_id: str,
-    graph_id: str,
-    dedupe_key: str,
-    ontology: dict[str, Any],
-    graph_backend: str,
-    graphiti_embedding_model: str,
-    oracle_runtime: dict[str, int | None],
-    source: str,
-) -> None:
-    timeout_seconds = max(0.5, float(Config.PROJECT_GET_WARMUP_TIMEOUT_SECONDS))
-    started_at = time.perf_counter()
-    try:
-        logger.info(
-            "Graphiti cache warm-up start source=%s project_id=%s graph_id=%s timeout_s=%.2f",
-            source,
-            project_id,
-            graph_id,
-            timeout_seconds,
-        )
-        builder = GraphBuilderService(
-            backend=_client_backend_for_graph_backend(graph_backend),
-            graph_backend=graph_backend,
-            graphiti_embedding_model=graphiti_embedding_model,
-            api_key=Config.ZEP_API_KEY,
-            project_id=project_id or None,
-            oracle_pool_min=oracle_runtime["oracle_pool_min"] if graph_backend == GRAPH_BACKEND_ORACLE else None,
-            oracle_pool_max=oracle_runtime["oracle_pool_max"] if graph_backend == GRAPH_BACKEND_ORACLE else None,
-            oracle_pool_increment=oracle_runtime["oracle_pool_increment"]
-            if graph_backend == GRAPH_BACKEND_ORACLE
-            else None,
-            oracle_max_coroutines=oracle_runtime["oracle_max_coroutines"]
-            if graph_backend == GRAPH_BACKEND_ORACLE
-            else None,
-        )
-        completed, maybe_error = _set_ontology_with_timeout(
-            builder=builder,
-            graph_id=graph_id,
-            ontology=ontology,
-            timeout_seconds=timeout_seconds,
-        )
-        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-        if not completed:
-            logger.warning(
-                "Graphiti cache warm-up timeout source=%s project_id=%s graph_id=%s elapsed_ms=%s error=%s",
-                source,
-                project_id,
-                graph_id,
-                elapsed_ms,
-                str(maybe_error),
-            )
-            return
-        if maybe_error is not None:
-            logger.warning(
-                "Graphiti cache warm-up failed source=%s project_id=%s graph_id=%s elapsed_ms=%s error=%s",
-                source,
-                project_id,
-                graph_id,
-                elapsed_ms,
-                str(maybe_error),
-            )
-            return
-        logger.info(
-            "Graphiti cache warm-up done source=%s project_id=%s graph_id=%s elapsed_ms=%s",
-            source,
-            project_id,
-            graph_id,
-            elapsed_ms,
-        )
-    except Exception as exc:
-        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-        logger.warning(
-            "Graphiti cache warm-up crashed source=%s project_id=%s graph_id=%s elapsed_ms=%s error=%s",
-            source,
-            project_id,
-            graph_id,
-            elapsed_ms,
-            str(exc),
-        )
-    finally:
-        _release_graphiti_warmup_key(dedupe_key)
-
-
-def _launch_graphiti_ontology_cache_warmup(
-    project: Any,
-    *,
-    graph_ids: list[str] | None = None,
-    source: str = "get_project",
-) -> None:
-    context = _collect_graphiti_warmup_context(project, graph_ids=graph_ids)
-    if context is None:
-        return
-
-    project_id = str(context["project_id"])
-    ontology = context["ontology"]
-    ontology_hash = str(context["ontology_hash"])
-    graph_backend = str(context["graph_backend"])
-    graphiti_embedding_model = str(context["graphiti_embedding_model"])
-    oracle_runtime = context["oracle_runtime"]
-    ttl_seconds = max(1, int(Config.PROJECT_GET_WARMUP_DEDUPE_TTL_SECONDS))
-    for graph_id in context["graph_ids"]:
-        dedupe_key = f"{project_id}:{graph_id}:{ontology_hash}"
-        if not _claim_graphiti_warmup_key(dedupe_key, ttl_seconds):
-            logger.info(
-                "Graphiti cache warm-up skipped source=%s project_id=%s graph_id=%s reason=duplicate",
-                source,
-                project_id,
-                graph_id,
-            )
-            continue
-        thread = threading.Thread(
-            target=_warm_graphiti_ontology_cache_worker,
-            kwargs={
-                "project_id": project_id,
-                "graph_id": graph_id,
-                "dedupe_key": dedupe_key,
-                "ontology": ontology,
-                "graph_backend": graph_backend,
-                "graphiti_embedding_model": graphiti_embedding_model,
-                "oracle_runtime": oracle_runtime,
-                "source": source,
-            },
-            daemon=True,
-            name=f"warmup-{project_id}-{graph_id}",
-        )
-        thread.start()
-
-
-def _warm_graphiti_ontology_cache(
-    project: Any,
-    *,
-    graph_ids: list[str] | None = None,
-    source: str = "sync",
-) -> None:
-    context = _collect_graphiti_warmup_context(project, graph_ids=graph_ids)
-    if context is None:
-        return
-    project_id = str(context["project_id"])
-    ontology = context["ontology"]
-    ontology_hash = str(context["ontology_hash"])
-    graph_backend = str(context["graph_backend"])
-    graphiti_embedding_model = str(context["graphiti_embedding_model"])
-    oracle_runtime = context["oracle_runtime"]
-    ttl_seconds = max(1, int(Config.PROJECT_GET_WARMUP_DEDUPE_TTL_SECONDS))
-    for graph_id in context["graph_ids"]:
-        dedupe_key = f"{project_id}:{graph_id}:{ontology_hash}"
-        if not _claim_graphiti_warmup_key(dedupe_key, ttl_seconds):
-            continue
-        _warm_graphiti_ontology_cache_worker(
-            project_id=project_id,
-            graph_id=graph_id,
-            dedupe_key=dedupe_key,
-            ontology=ontology,
-            graph_backend=graph_backend,
-            graphiti_embedding_model=graphiti_embedding_model,
-            oracle_runtime=oracle_runtime,
-            source=source,
-        )
-
-
 @router.get("/project/list")
 def list_projects(limit: int = Query(default=50, ge=1, le=500)) -> dict[str, Any]:
     projects = ProjectManager.list_projects(limit=limit)
@@ -925,7 +664,6 @@ def get_project(project_id: str) -> Any:
     project = ProjectManager.get_project(project_id)
     if not project:
         return _error_response(404, f"Project not found: {project_id}")
-    _launch_graphiti_ontology_cache_warmup(project, source="get_project")
     return {
         "success": True,
         "data": _build_project_response_data(project),
@@ -1091,15 +829,6 @@ def update_project(project_id: str, data: ProjectPatchBody) -> Any:
         latest_ontology_version_id = None
 
     ProjectManager.save_project(project)
-    if has_ontology:
-        _warm_graphiti_ontology_cache(
-            project,
-            graph_ids=[
-                existing_graph_id,
-                str(getattr(project, "project_id", "") or "").strip(),
-            ],
-            source="update_project",
-        )
     response_data = _build_project_response_data(project)
     if latest_ontology_version_id is not None:
         response_data["ontology_version_id"] = latest_ontology_version_id
@@ -1987,17 +1716,10 @@ def get_graph_data(
         normalized_workspace_id = str(project_workspace_id or "").strip() or None
         normalized_project_id = str(project_id or "").strip()
         project_graph_backend = ""
-        project_oracle_runtime = {
-            "oracle_pool_min": _coerce_optional_positive_int(Config.ORACLE_POOL_MIN),
-            "oracle_pool_max": _coerce_optional_positive_int(Config.ORACLE_POOL_MAX),
-            "oracle_pool_increment": _coerce_optional_positive_int(Config.ORACLE_POOL_INCREMENT),
-            "oracle_max_coroutines": _coerce_optional_positive_int(Config.ORACLE_MAX_COROUTINES),
-        }
         if normalized_project_id:
             project = ProjectManager.get_project(normalized_project_id)
             if project is not None:
                 project_graph_backend = str(getattr(project, "graph_backend", "") or "")
-                project_oracle_runtime = _resolve_oracle_runtime_settings(project)
 
         requested_graph_backend = _normalize_graph_backend(graph_backend)
         resolved_graph_backend = _resolve_graph_backend(
@@ -2031,18 +1753,6 @@ def get_graph_data(
                 graph_backend=selected_graph_backend,
                 api_key=Config.ZEP_API_KEY,
                 project_id=normalized_project_id or None,
-                oracle_pool_min=project_oracle_runtime["oracle_pool_min"]
-                if selected_graph_backend == GRAPH_BACKEND_ORACLE
-                else None,
-                oracle_pool_max=project_oracle_runtime["oracle_pool_max"]
-                if selected_graph_backend == GRAPH_BACKEND_ORACLE
-                else None,
-                oracle_pool_increment=project_oracle_runtime["oracle_pool_increment"]
-                if selected_graph_backend == GRAPH_BACKEND_ORACLE
-                else None,
-                oracle_max_coroutines=project_oracle_runtime["oracle_max_coroutines"]
-                if selected_graph_backend == GRAPH_BACKEND_ORACLE
-                else None,
             )
             return builder.get_graph_data(
                 graph_id,
@@ -2082,17 +1792,10 @@ def delete_graph(
 
         normalized_project_id = str(project_id or "").strip()
         project_graph_backend = ""
-        project_oracle_runtime = {
-            "oracle_pool_min": _coerce_optional_positive_int(Config.ORACLE_POOL_MIN),
-            "oracle_pool_max": _coerce_optional_positive_int(Config.ORACLE_POOL_MAX),
-            "oracle_pool_increment": _coerce_optional_positive_int(Config.ORACLE_POOL_INCREMENT),
-            "oracle_max_coroutines": _coerce_optional_positive_int(Config.ORACLE_MAX_COROUTINES),
-        }
         if normalized_project_id:
             project = ProjectManager.get_project(normalized_project_id)
             if project is not None:
                 project_graph_backend = str(getattr(project, "graph_backend", "") or "")
-                project_oracle_runtime = _resolve_oracle_runtime_settings(project)
         requested_graph_backend = _normalize_graph_backend(graph_backend)
         resolved_graph_backend = _resolve_graph_backend(project_graph_backend, requested_graph_backend)
         if (
@@ -2119,18 +1822,6 @@ def delete_graph(
             graph_backend=resolved_graph_backend,
             api_key=Config.ZEP_API_KEY,
             project_id=normalized_project_id or None,
-            oracle_pool_min=project_oracle_runtime["oracle_pool_min"]
-            if resolved_graph_backend == GRAPH_BACKEND_ORACLE
-            else None,
-            oracle_pool_max=project_oracle_runtime["oracle_pool_max"]
-            if resolved_graph_backend == GRAPH_BACKEND_ORACLE
-            else None,
-            oracle_pool_increment=project_oracle_runtime["oracle_pool_increment"]
-            if resolved_graph_backend == GRAPH_BACKEND_ORACLE
-            else None,
-            oracle_max_coroutines=project_oracle_runtime["oracle_max_coroutines"]
-            if resolved_graph_backend == GRAPH_BACKEND_ORACLE
-            else None,
         )
         builder.delete_graph(graph_id)
         return {
