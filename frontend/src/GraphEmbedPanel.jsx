@@ -573,7 +573,6 @@ export default function GraphEmbedPanel() {
     selectedProjectId,
   );
   const graphUrl = resolveGraphEmbedUrl(projectForGraph);
-  const hasBuiltGraph = Boolean(projectForGraph?.has_built_graph);
   const refreshDataWhileBuild = Boolean(state.form?.refreshDataWhileBuild);
   const refreshDataPollSecondsValue = Number(state.form?.refreshDataPollSeconds);
   const refreshDataPollSeconds =
@@ -1013,17 +1012,6 @@ export default function GraphEmbedPanel() {
       if (!isProjectHydratedForSelection) {
         return;
       }
-      if (!hasBuiltGraph && !isLiveBuildDataRefreshEnabled) {
-        setGraphData(null);
-        const message = "No graph data yet. Run Step B (Build Graph) for the selected project first.";
-        setError(silent ? "" : message);
-        setLoading(false);
-        if (!silent) {
-          addSystemLogRef.current?.(message);
-        }
-        return;
-      }
-
       if (!graphId) {
         setGraphData(null);
         const message = "No graph data yet. Run Step B (Build Graph) for the selected project first.";
@@ -1120,7 +1108,6 @@ export default function GraphEmbedPanel() {
     [
       graphCacheKey,
       graphId,
-      hasBuiltGraph,
       isLiveBuildDataRefreshEnabled,
       isProjectHydratedForSelection,
       projectGraphBackend,
@@ -1146,7 +1133,7 @@ export default function GraphEmbedPanel() {
     setGraphSearchResult(null);
     setGraphSearchOpen(false);
     setInspectorTab("entity");
-    if (!isProjectHydratedForSelection || (!hasBuiltGraph && !isLiveBuildDataRefreshEnabled) || !graphId) {
+    if (!isProjectHydratedForSelection || (!isLiveBuildDataRefreshEnabled && !graphId)) {
       setGraphData(null);
       setError("");
       setLoading(false);
@@ -1177,7 +1164,6 @@ export default function GraphEmbedPanel() {
     fetchGraphData,
     graphCacheKey,
     graphId,
-    hasBuiltGraph,
     isLiveBuildDataRefreshEnabled,
     isProjectHydratedForSelection,
     state.graphTask.status,

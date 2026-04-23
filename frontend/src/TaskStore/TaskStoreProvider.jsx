@@ -175,7 +175,7 @@ export function TaskStoreProvider({ children }) {
     addSystemLog("Project view initialized.");
     healthActions.checkBackendHealth();
     promptLabelActions.fetchPromptLabels({ syncFormLabel: true }).then(() => {
-      projectActions.fetchProjects(undefined, true);
+      projectActions.fetchProjects(undefined, false);
     });
     const timer = setInterval(healthActions.checkBackendHealth, 30000);
     return () => clearInterval(timer);
