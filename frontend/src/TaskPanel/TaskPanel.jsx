@@ -247,6 +247,7 @@ export default function TaskPanel() {
   const isTypePropertyEditorOpen = Boolean(typePropertyEditor.open);
   const hasOntologyGeneratedDiff = ontologyGeneratedDiff.entity || ontologyGeneratedDiff.relationship;
   const canRunGraphBuild = graphTask.status !== "running" && stepBUnlocked && !ontologyMergeRequired;
+  const activeOntologyTypeCount = isEntityTab ? draftEntityTypeNames.length : draftEdgeTypeNames.length;
   const resumeTotalBatches = Number(graphResumeCandidate?.totalBatches);
   const resumeLastCompletedBatchIndex = Number(graphResumeCandidate?.lastCompletedBatchIndex);
   const canShowResumeGraphBuild =
@@ -2728,7 +2729,12 @@ export default function TaskPanel() {
             }
           >
             <div className="ontology-editor-head">
-              <h3>Edit ontology types</h3>
+              <div className="ontology-editor-head-meta">
+                <h3>Edit ontology types</h3>
+                <span className="ontology-editor-head-count">
+                  Total: {activeOntologyTypeCount} item{activeOntologyTypeCount === 1 ? "" : "s"}
+                </span>
+              </div>
               <button
                 className="ontology-editor-close"
                 type="button"
@@ -2781,6 +2787,7 @@ export default function TaskPanel() {
                     <TypeTagEditor
                       title="Original Entity Types"
                       tags={originalEntityTypeNames}
+                      countValue={originalEntityTypeNames.length}
                       onChange={handleOriginalEntityTagNamesChange}
                       onOpenProperties={(index) => openTypePropertyEditor("entity", index, "original")}
                       placeholder="Add entity type and press Enter"
@@ -2790,6 +2797,7 @@ export default function TaskPanel() {
                     <TypeTagEditor
                       title="New / Generated Entity Types"
                       tags={draftEntityTypeNames}
+                      countValue={draftEntityTypeNames.length}
                       onChange={handleEntityTagNamesChange}
                       onOpenProperties={(index) => openTypePropertyEditor("entity", index, "draft")}
                       placeholder="Add entity type and press Enter"
@@ -2809,6 +2817,7 @@ export default function TaskPanel() {
                   <TypeTagEditor
                     title="Entity Types"
                     tags={draftEntityTypeNames}
+                    countValue={draftEntityTypeNames.length}
                     onChange={handleEntityTagNamesChange}
                     onOpenProperties={(index) => openTypePropertyEditor("entity", index, "draft")}
                     placeholder="Add entity type and press Enter"
@@ -2829,6 +2838,7 @@ export default function TaskPanel() {
                     <TypeTagEditor
                       title="Original Relationship Types"
                       tags={originalEdgeTypeNames}
+                      countValue={originalEdgeTypeNames.length}
                       onChange={handleOriginalRelationshipTagNamesChange}
                       onOpenProperties={(index) =>
                         openTypePropertyEditor("relationship", index, "original")
@@ -2840,6 +2850,7 @@ export default function TaskPanel() {
                     <TypeTagEditor
                       title="New / Generated Relationship Types"
                       tags={draftEdgeTypeNames}
+                      countValue={draftEdgeTypeNames.length}
                       onChange={handleRelationshipTagNamesChange}
                       onOpenProperties={(index) => openTypePropertyEditor("relationship", index, "draft")}
                       placeholder="Add relationship type and press Enter"
@@ -2859,6 +2870,7 @@ export default function TaskPanel() {
                   <TypeTagEditor
                     title="Relationship Types"
                     tags={draftEdgeTypeNames}
+                    countValue={draftEdgeTypeNames.length}
                     onChange={handleRelationshipTagNamesChange}
                     onOpenProperties={(index) => openTypePropertyEditor("relationship", index, "draft")}
                     placeholder="Add relationship type and press Enter"

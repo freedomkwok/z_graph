@@ -11,6 +11,8 @@ export default function EditableStringListEditor({
   inputClassName = "ontology-string-input",
   editInputClassName = "ontology-string-edit-input",
   showEditTools = false,
+  showCount = false,
+  countLabel = "Total",
 }) {
   const toText = (value) => String(value ?? "").trim();
   const [inputValue, setInputValue] = useState("");
@@ -24,6 +26,7 @@ export default function EditableStringListEditor({
     .map((value) => toText(value))
     .filter(Boolean);
   const canShowDeleteControls = showDeleteControls && editingIndex < 0;
+  const totalCount = normalizedValues.length;
 
   useEffect(() => {
     if (editingIndex < 0) return;
@@ -145,6 +148,11 @@ export default function EditableStringListEditor({
               Delete All
             </button>
           )}
+        </div>
+      )}
+      {showCount && (
+        <div className="ontology-string-list-count-row">
+          {countLabel}: {totalCount} item{totalCount === 1 ? "" : "s"}
         </div>
       )}
       {normalizedValues.map((value, index) =>

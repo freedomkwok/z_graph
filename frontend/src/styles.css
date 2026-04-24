@@ -988,9 +988,18 @@ textarea {
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.99);
   box-shadow: 0 8px 22px rgba(8, 22, 48, 0.2);
-  max-height: 280px;
+  max-height: 448px;
   overflow: auto;
   padding: 6px;
+}
+
+.graph-quick-search-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6a768b;
+  padding: 6px 10px 4px;
 }
 
 .graph-quick-search-option {
@@ -1004,6 +1013,10 @@ textarea {
   display: grid;
   gap: 2px;
   padding: 8px 10px;
+}
+
+.graph-quick-search-option-remote {
+  border-style: dashed;
 }
 
 .graph-quick-search-option:hover {
@@ -1026,6 +1039,13 @@ textarea {
   font-size: 11px;
   color: #4f5f7e;
   text-transform: capitalize;
+}
+
+.graph-quick-search-loading-row {
+  font-size: 12px;
+  color: #4f5f7e;
+  padding: 10px;
+  border-top: 1px solid #e5ebf6;
 }
 
 .graph-edge-label-toggle {
@@ -2652,6 +2672,21 @@ textarea {
   font-size: 18px;
 }
 
+.ontology-editor-head-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ontology-editor-head-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+  line-height: 1.2;
+}
+
 .ontology-editor-close {
   border: 0;
   background: transparent;
@@ -2734,6 +2769,13 @@ textarea {
 .ontology-editor-section-head h4 {
   margin: 0;
   font-size: 13px;
+}
+
+.ontology-type-section-count-row {
+  margin: -2px 0 8px;
+  text-align: right;
+  font-size: 12px;
+  color: #777;
 }
 
 .ontology-type-section-actions {
@@ -3038,6 +3080,13 @@ textarea {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.ontology-string-list-count-row {
+  margin: 2px 0 6px;
+  text-align: right;
+  font-size: 12px;
+  color: #777;
 }
 
 .ontology-string-list-item .ontology-string-chip {

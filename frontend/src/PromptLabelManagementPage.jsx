@@ -1480,6 +1480,8 @@ export default function PromptLabelManagementPage({ onNavigate }) {
                               placeholder={row.placeholder}
                               disabled={disabled}
                               showEditTools
+                              showCount
+                              countLabel="Total"
                             />
                           )}
                         </div>

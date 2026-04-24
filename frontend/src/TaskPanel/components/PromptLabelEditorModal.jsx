@@ -300,6 +300,8 @@ export default function PromptLabelEditorModal({
                           placeholder={row.placeholder}
                           disabled={disabled}
                           showEditTools
+                          showCount
+                          countLabel="Total"
                         />
                       )}
                     </div>

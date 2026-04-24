@@ -22,6 +22,8 @@ export default function TypeTagEditor({
   onMergeSelected,
   changedTagNames = [],
   readOnly = false,
+  showCount = true,
+  countValue,
 }) {
   const [inputValue, setInputValue] = useState("");
   const [searchValue, setSearchValue] = useState("");
@@ -66,6 +68,11 @@ export default function TypeTagEditor({
       .filter(Boolean),
   );
   const selectedCount = selectedSet.size;
+  const totalCount = Number.isFinite(Number(countValue))
+    ? Math.max(0, Number(countValue))
+    : Array.isArray(tags)
+      ? tags.length
+      : 0;
 
   return (
     <section className={`ontology-editor-section ${highlighted ? "focused" : ""}`}>
@@ -100,6 +107,11 @@ export default function TypeTagEditor({
           )}
         </div>
       </div>
+      {showCount && (
+        <div className="ontology-type-section-count-row">
+          Total: {totalCount} item{totalCount === 1 ? "" : "s"}
+        </div>
+      )}
       <div className="ontology-tag-editor-box" onClick={() => addInputRef.current?.focus()}>
         {visibleTags.map(({ tag, index }) => (
           <TagChip

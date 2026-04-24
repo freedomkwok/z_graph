@@ -95,9 +95,9 @@ class Settings(BaseSettings):
     oracle_rdf_graph_name: str | None = None
     oracle_rdf_tablespace: str | None = None
     oracle_pg_graph_id: str | None = None
-    oracle_pool_min: int | None = None
-    oracle_pool_max: int | None = None
-    oracle_pool_increment: int | None = None
+    oracle_pool_min: int | None = 2
+    oracle_pool_max: int | None = 8
+    oracle_pool_increment: int | None = 1
     oracle_max_coroutines: int | None = 20
     openai_api_key: str | None = None
     openai_base_url: str | None = None

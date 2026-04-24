@@ -35,6 +35,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse
 
+from app.core.backend_client_factory.client_factory import get_or_create_zep_client
 from app.core.config import Config
 from app.core.managers.prompt_label_manager import PromptLabelManager
 from app.core.managers.batch_process_manager import BatchProcessManager
@@ -174,6 +175,124 @@ def _normalize_graph_backend(value: Any) -> str:
     if normalized in SUPPORTED_GRAPH_BACKENDS:
         return normalized
     return ""
+
+
+def _normalize_graph_search_scope(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"all", "node", "edge", "episode"}:
+        return normalized
+    return "all"
+
+
+def _build_text_match_score(text: str, query: str) -> int:
+    normalized_text = str(text or "").strip().lower()
+    normalized_query = str(query or "").strip().lower()
+    if not normalized_text or not normalized_query:
+        return 0
+    score = 0
+    if normalized_query in normalized_text:
+        score += 100
+    keywords = [
+        token.strip()
+        for token in normalized_query.replace(",", " ").replace("，", " ").split()
+        if len(token.strip()) > 1
+    ]
+    for keyword in keywords:
+        if keyword in normalized_text:
+            score += 12
+    return score
+
+
+def _serialize_episode_payload(episode: Any, fallback_uuid: str) -> dict[str, Any]:
+    model_data: dict[str, Any] = {}
+    if hasattr(episode, "model_dump"):
+        try:
+            model_data = episode.model_dump(mode="json", exclude_none=False)
+        except TypeError:
+            model_data = episode.model_dump()
+        except Exception:
+            model_data = {}
+    elif hasattr(episode, "dict"):
+        try:
+            model_data = episode.dict()
+        except Exception:
+            model_data = {}
+    elif hasattr(episode, "__dict__"):
+        model_data = dict(getattr(episode, "__dict__", {}) or {})
+
+    episode_uuid = getattr(episode, "uuid_", None) or getattr(episode, "uuid", None) or fallback_uuid
+    payload = {
+        "uuid": str(episode_uuid),
+        "processed": getattr(episode, "processed", None),
+        "type": getattr(episode, "type", None),
+        "data": getattr(episode, "data", None),
+        "source": getattr(episode, "source", None),
+        "source_description": getattr(episode, "source_description", None),
+        "created_at": getattr(episode, "created_at", None),
+        "reference_time": getattr(episode, "reference_time", None),
+    }
+    if isinstance(model_data, dict):
+        for key, value in model_data.items():
+            if key not in payload:
+                payload[key] = value
+    return payload
+
+
+def _collect_episode_search_hits(
+    *,
+    builder: GraphBuilderService,
+    query: str,
+    episode_node_anchors: dict[str, set[str]],
+    episode_limit: int,
+) -> list[dict[str, Any]]:
+    if not episode_node_anchors:
+        return []
+    episode_namespace = getattr(getattr(builder.client, "graph", None), "episode", None)
+    get_episode = getattr(episode_namespace, "get", None)
+    if not callable(get_episode):
+        return []
+
+    scored_items: list[tuple[int, dict[str, Any]]] = []
+    for episode_id, anchor_node_ids in episode_node_anchors.items():
+        normalized_episode_id = str(episode_id or "").strip()
+        if not normalized_episode_id:
+            continue
+        try:
+            episode = get_episode(uuid_=normalized_episode_id)
+        except Exception:
+            continue
+        episode_payload = _serialize_episode_payload(episode, normalized_episode_id)
+        raw_data = str(episode_payload.get("data") or "")
+        source_description = str(episode_payload.get("source_description") or "").strip()
+        source_value = str(episode_payload.get("source") or "").strip()
+        searchable_text = " ".join(
+            [
+                normalized_episode_id,
+                raw_data,
+                source_description,
+                source_value,
+            ]
+        )
+        score = _build_text_match_score(searchable_text, query)
+        if score <= 0:
+            continue
+        preview_text = raw_data.strip().replace("\n", " ")
+        if len(preview_text) > 180:
+            preview_text = f"{preview_text[:177]}..."
+        scored_items.append(
+            (
+                score,
+                {
+                    "id": normalized_episode_id,
+                    "subtitle": source_description or source_value or "Episode",
+                    "preview": preview_text,
+                    "score": score,
+                    "anchor_node_ids": sorted(anchor_node_ids),
+                },
+            )
+        )
+    scored_items.sort(key=lambda item: (-item[0], item[1]["id"]))
+    return [item[1] for item in scored_items[: max(1, int(episode_limit or 1))]]
 
 
 def _is_supported_upload_file(upload: UploadFile) -> bool:
@@ -1784,7 +1903,23 @@ def get_graph_data(
                 if selected_graph_backend == GRAPH_BACKEND_ORACLE and resolved_project is not None
                 else None
             )
+            cached_client = get_or_create_zep_client(
+                backend=selected_backend,
+                api_key=Config.ZEP_API_KEY,
+                graph_backend=selected_graph_backend,
+                project_id=normalized_project_id or None,
+                oracle_pool_min=oracle_runtime["oracle_pool_min"] if oracle_runtime is not None else None,
+                oracle_pool_max=oracle_runtime["oracle_pool_max"] if oracle_runtime is not None else None,
+                oracle_pool_increment=oracle_runtime["oracle_pool_increment"]
+                if oracle_runtime is not None
+                else None,
+                oracle_max_coroutines=oracle_runtime["oracle_max_coroutines"]
+                if oracle_runtime is not None
+                else None,
+                client_profile="non_build_graph",
+            )
             builder = GraphBuilderService(
+                client=cached_client,
                 backend=selected_backend,
                 graph_backend=selected_graph_backend,
                 api_key=Config.ZEP_API_KEY,
@@ -1825,6 +1960,154 @@ def get_graph_data(
         return _error_response(500, str(exc), exc)
 
 
+@router.get("/graph/search")
+def search_graph_data(
+    graph_id: str = Query(...),
+    query: str = Query(...),
+    scope: str = Query(default="all"),
+    limit: int = Query(default=24, ge=1, le=100),
+    graph_backend: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+) -> Any:
+    try:
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            return {"success": True, "data": {"nodes": [], "edges": [], "episodes": []}}
+
+        normalized_project_id = str(project_id or "").strip()
+        resolved_project = None
+        project_graph_backend = ""
+        if normalized_project_id:
+            resolved_project = ProjectManager.get_project(normalized_project_id)
+            if resolved_project is not None:
+                project_graph_backend = str(getattr(resolved_project, "graph_backend", "") or "")
+
+        requested_graph_backend = _normalize_graph_backend(graph_backend)
+        resolved_graph_backend = _resolve_graph_backend(project_graph_backend, requested_graph_backend)
+        oracle_project_error = _require_project_id_for_oracle_backend(
+            resolved_graph_backend,
+            normalized_project_id,
+            route_name="/api/graph/search",
+        )
+        if oracle_project_error is not None:
+            return oracle_project_error
+
+        normalized_scope = _normalize_graph_search_scope(scope)
+        client_scope = "both"
+        if normalized_scope == "node":
+            client_scope = "nodes"
+        elif normalized_scope == "edge":
+            client_scope = "edges"
+        elif normalized_scope == "episode":
+            client_scope = "edges"
+
+        oracle_runtime = (
+            _resolve_oracle_runtime_settings(resolved_project)
+            if resolved_graph_backend == GRAPH_BACKEND_ORACLE and resolved_project is not None
+            else None
+        )
+        selected_backend = _client_backend_for_graph_backend(resolved_graph_backend)
+        cached_client = get_or_create_zep_client(
+            backend=selected_backend,
+            api_key=Config.ZEP_API_KEY,
+            graph_backend=resolved_graph_backend,
+            project_id=normalized_project_id or None,
+            oracle_pool_min=oracle_runtime["oracle_pool_min"] if oracle_runtime is not None else None,
+            oracle_pool_max=oracle_runtime["oracle_pool_max"] if oracle_runtime is not None else None,
+            oracle_pool_increment=oracle_runtime["oracle_pool_increment"] if oracle_runtime is not None else None,
+            oracle_max_coroutines=oracle_runtime["oracle_max_coroutines"] if oracle_runtime is not None else None,
+            client_profile="non_build_graph",
+        )
+        builder = GraphBuilderService(
+            client=cached_client,
+            backend=selected_backend,
+            graph_backend=resolved_graph_backend,
+            api_key=Config.ZEP_API_KEY,
+            project_id=normalized_project_id or None,
+            oracle_pool_min=oracle_runtime["oracle_pool_min"] if oracle_runtime is not None else None,
+            oracle_pool_max=oracle_runtime["oracle_pool_max"] if oracle_runtime is not None else None,
+            oracle_pool_increment=oracle_runtime["oracle_pool_increment"] if oracle_runtime is not None else None,
+            oracle_max_coroutines=oracle_runtime["oracle_max_coroutines"] if oracle_runtime is not None else None,
+            client_profile="non_build_graph",
+        )
+        search_result = builder.client.search(
+            graph_id=graph_id,
+            query=normalized_query,
+            limit=limit,
+            scope=client_scope,
+            reranker="cross_encoder",
+        )
+        nodes = list(getattr(search_result, "nodes", []) or [])
+        edges = list(getattr(search_result, "edges", []) or [])
+
+        nodes_payload: list[dict[str, Any]] = []
+        for node in nodes:
+            node_uuid = str(getattr(node, "uuid", "") or "").strip()
+            if not node_uuid:
+                continue
+            nodes_payload.append(
+                {
+                    "uuid": node_uuid,
+                    "name": str(getattr(node, "name", "") or ""),
+                    "labels": list(getattr(node, "labels", []) or []),
+                    "summary": str(getattr(node, "summary", "") or ""),
+                    "attributes": getattr(node, "attributes", {}) or {},
+                }
+            )
+
+        edges_payload: list[dict[str, Any]] = []
+        episode_node_anchors: dict[str, set[str]] = {}
+        for edge in edges:
+            edge_uuid = str(getattr(edge, "uuid", "") or "").strip()
+            source_node_uuid = str(getattr(edge, "source_node_uuid", "") or "").strip()
+            target_node_uuid = str(getattr(edge, "target_node_uuid", "") or "").strip()
+            episodes = list(getattr(edge, "episodes", []) or [])
+            episode_ids = [str(episode_id or "").strip() for episode_id in episodes if str(episode_id or "").strip()]
+            for episode_id in episode_ids:
+                anchor_set = episode_node_anchors.setdefault(episode_id, set())
+                if source_node_uuid:
+                    anchor_set.add(source_node_uuid)
+                if target_node_uuid:
+                    anchor_set.add(target_node_uuid)
+            edges_payload.append(
+                {
+                    "uuid": edge_uuid,
+                    "name": str(getattr(edge, "name", "") or ""),
+                    "fact": str(getattr(edge, "fact", "") or ""),
+                    "fact_type": str(getattr(edge, "fact_type", "") or ""),
+                    "source_node_uuid": source_node_uuid,
+                    "target_node_uuid": target_node_uuid,
+                    "episodes": episode_ids,
+                }
+            )
+
+        include_nodes = normalized_scope in {"all", "node"}
+        include_edges = normalized_scope in {"all", "edge"}
+        include_episodes = normalized_scope in {"all", "episode"}
+        episodes_payload = (
+            _collect_episode_search_hits(
+                builder=builder,
+                query=normalized_query,
+                episode_node_anchors=episode_node_anchors,
+                episode_limit=limit,
+            )
+            if include_episodes
+            else []
+        )
+
+        return {
+            "success": True,
+            "data": {
+                "nodes": nodes_payload if include_nodes else [],
+                "edges": edges_payload if include_edges else [],
+                "episodes": episodes_payload,
+            },
+        }
+    except Exception as exc:
+        logger.exception("Failed to search graph data")
+        return _error_response(500, str(exc), exc)
+
+
 @router.delete("/delete/{graph_id}")
 def delete_graph(
     graph_id: str,
@@ -1862,8 +2145,17 @@ def delete_graph(
         if oracle_project_error is not None:
             return oracle_project_error
 
+        selected_backend = _client_backend_for_graph_backend(resolved_graph_backend)
+        cached_client = get_or_create_zep_client(
+            backend=selected_backend,
+            api_key=Config.ZEP_API_KEY,
+            graph_backend=resolved_graph_backend,
+            project_id=normalized_project_id or None,
+            client_profile="non_build_graph",
+        )
         builder = GraphBuilderService(
-            backend=_client_backend_for_graph_backend(resolved_graph_backend),
+            client=cached_client,
+            backend=selected_backend,
             graph_backend=resolved_graph_backend,
             api_key=Config.ZEP_API_KEY,
             project_id=normalized_project_id or None,

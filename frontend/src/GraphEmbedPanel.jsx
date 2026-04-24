@@ -29,6 +29,7 @@ const EDGE_STATS_WINDOW_MIN_WIDTH = 500;
 const NODE_STATS_WINDOW_DEFAULT_WIDTH = 460;
 const NODE_STATS_WINDOW_MIN_WIDTH = 320;
 const GRAPH_SEARCH_RESULT_LIMIT = 24;
+const GRAPH_SEARCH_BACKEND_RESULT_LIMIT = 24;
 const GRAPH_SEARCH_SCOPES = [
   { value: "all", label: "All" },
   { value: "node", label: "Nodes" },
@@ -165,6 +166,24 @@ function buildGraphDataApiPath(graphId, projectWorkspaceId, projectGraphBackend,
     params.set("project_id", normalizedProjectId);
   }
   return `/api/data/${encodeURIComponent(String(graphId ?? "").trim())}?${params.toString()}`;
+}
+
+function buildGraphQuickSearchApiPath(graphId, query, scope, projectGraphBackend, projectId) {
+  const params = new URLSearchParams({
+    graph_id: String(graphId ?? "").trim(),
+    query: String(query ?? "").trim(),
+    scope: String(scope ?? "all").trim().toLowerCase(),
+    limit: String(GRAPH_SEARCH_BACKEND_RESULT_LIMIT),
+  });
+  const normalizedGraphBackend = String(projectGraphBackend ?? "").trim();
+  if (normalizedGraphBackend) {
+    params.set("graph_backend", normalizedGraphBackend);
+  }
+  const normalizedProjectId = String(projectId ?? "").trim();
+  if (normalizedProjectId) {
+    params.set("project_id", normalizedProjectId);
+  }
+  return `/api/graph/search?${params.toString()}`;
 }
 
 function buildGraphCacheKey(graphId, projectWorkspaceId, projectGraphBackend) {
@@ -599,6 +618,8 @@ export default function GraphEmbedPanel() {
   const addSystemLogRef = useRef(addSystemLog);
   const fetchInFlightRef = useRef(false);
   const fetchAbortControllerRef = useRef(null);
+  const backendSearchAbortControllerRef = useRef(null);
+  const backendSearchRequestSerialRef = useRef(0);
   const inFlightRequestScopeRef = useRef("");
   const fetchRequestSerialRef = useRef(0);
   const previousGraphTaskStatusRef = useRef(state.graphTask.status);
@@ -637,6 +658,8 @@ export default function GraphEmbedPanel() {
   const [graphSearchScope, setGraphSearchScope] = useState("all");
   const [graphSearchResult, setGraphSearchResult] = useState(null);
   const [graphSearchOpen, setGraphSearchOpen] = useState(false);
+  const [backendGraphSearchOptions, setBackendGraphSearchOptions] = useState([]);
+  const [isBackendGraphSearchLoading, setIsBackendGraphSearchLoading] = useState(false);
   const [detailPanelSide, setDetailPanelSide] = useState("right");
   const [detailPanelPosition, setDetailPanelPosition] = useState(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -827,6 +850,22 @@ export default function GraphEmbedPanel() {
       .sort((left, right) => left.label.localeCompare(right.label))
       .slice(0, GRAPH_SEARCH_RESULT_LIMIT);
   }, [graphData, graphSearchScope, graphSearchText, graphLabelInput]);
+  const mergedGraphSearchOptions = useMemo(() => {
+    const localOptions = Array.isArray(graphSearchOptions) ? graphSearchOptions : [];
+    const remoteOptions = Array.isArray(backendGraphSearchOptions) ? backendGraphSearchOptions : [];
+    if (!localOptions.length) return remoteOptions;
+    if (!remoteOptions.length) return localOptions;
+    const dedupedByKey = new Map();
+    localOptions.forEach((option) => {
+      dedupedByKey.set(String(option?.key ?? ""), option);
+    });
+    remoteOptions.forEach((option) => {
+      const optionKey = String(option?.key ?? "").trim();
+      if (!optionKey || dedupedByKey.has(optionKey)) return;
+      dedupedByKey.set(optionKey, option);
+    });
+    return Array.from(dedupedByKey.values());
+  }, [backendGraphSearchOptions, graphSearchOptions]);
   const filteredGraphData = useMemo(() => {
     const nodes = Array.isArray(graphData?.nodes) ? graphData.nodes : [];
     const edges = Array.isArray(graphData?.edges) ? graphData.edges : [];
@@ -917,6 +956,144 @@ export default function GraphEmbedPanel() {
     window.addEventListener("mousedown", onMouseDown);
     return () => window.removeEventListener("mousedown", onMouseDown);
   }, [graphSearchOpen]);
+
+  useEffect(() => {
+    const normalizedQuery = String(graphSearchText ?? "").trim();
+    if (!graphSearchOpen || !normalizedQuery || !graphId || !isProjectHydratedForSelection) {
+      try {
+        backendSearchAbortControllerRef.current?.abort();
+      } catch {
+        // Ignore abort cleanup failures.
+      }
+      backendSearchAbortControllerRef.current = null;
+      backendSearchRequestSerialRef.current += 1;
+      setIsBackendGraphSearchLoading(false);
+      setBackendGraphSearchOptions([]);
+      return undefined;
+    }
+
+    const requestSerial = backendSearchRequestSerialRef.current + 1;
+    backendSearchRequestSerialRef.current = requestSerial;
+    const controller = new AbortController();
+    backendSearchAbortControllerRef.current = controller;
+    setIsBackendGraphSearchLoading(true);
+    setBackendGraphSearchOptions([]);
+
+    const run = async () => {
+      try {
+        const response = await trackedFetch(
+          withApiBase(
+            buildGraphQuickSearchApiPath(
+              graphId,
+              normalizedQuery,
+              graphSearchScope,
+              projectGraphBackend,
+              selectedProjectId,
+            ),
+          ),
+          {
+            cache: "no-store",
+            headers: { Accept: "application/json" },
+            signal: controller.signal,
+          },
+          { source: "graph_data_polling" },
+        );
+        const payload = await response.json();
+        if (controller.signal.aborted || requestSerial !== backendSearchRequestSerialRef.current) {
+          return;
+        }
+        if (!response.ok || !payload?.success) {
+          throw new Error(payload?.error ?? "Failed to search graph");
+        }
+        const nodeNameById = new Map(
+          (Array.isArray(graphData?.nodes) ? graphData.nodes : []).map((node) => [
+            String(node?.uuid ?? node?.id ?? "").trim(),
+            getNodeDisplayLabel(node, graphLabelInput),
+          ]),
+        );
+        const remoteOptions = [];
+        const remoteNodes = Array.isArray(payload?.data?.nodes) ? payload.data.nodes : [];
+        const remoteEdges = Array.isArray(payload?.data?.edges) ? payload.data.edges : [];
+        const remoteEpisodes = Array.isArray(payload?.data?.episodes) ? payload.data.episodes : [];
+
+        remoteNodes.forEach((node) => {
+          const uuid = String(node?.uuid ?? "").trim();
+          if (!uuid) return;
+          const labels = Array.isArray(node?.labels) ? node.labels : [];
+          const nonGenericLabel = labels.find((label) => label !== "Entity" && label !== "Node");
+          remoteOptions.push({
+            key: `remote:node:${uuid}`,
+            kind: "node",
+            label: getNodeDisplayLabel(node, graphLabelInput),
+            subtitle: nonGenericLabel || String(node?.summary ?? "").trim() || "node",
+            anchorNodeIds: [uuid],
+            nodeData: node,
+          });
+        });
+
+        remoteEdges.forEach((edge) => {
+          const edgeUuid = String(edge?.uuid ?? "").trim();
+          const sourceNodeUuid = String(edge?.source_node_uuid ?? "").trim();
+          const targetNodeUuid = String(edge?.target_node_uuid ?? "").trim();
+          const sourceName = nodeNameById.get(sourceNodeUuid) ?? (sourceNodeUuid || "Unknown");
+          const targetName = nodeNameById.get(targetNodeUuid) ?? (targetNodeUuid || "Unknown");
+          const relationText = String(edge?.fact ?? "").trim() || String(edge?.name ?? "").trim() || "edge";
+          remoteOptions.push({
+            key: `remote:edge:${edgeUuid || `${sourceNodeUuid}:${targetNodeUuid}:${relationText}`}`,
+            kind: "edge",
+            label: `${sourceName} -> ${targetName}`,
+            subtitle: relationText,
+            anchorNodeIds: [sourceNodeUuid, targetNodeUuid].filter(Boolean),
+            edgeData: edge,
+          });
+        });
+
+        remoteEpisodes.forEach((episode) => {
+          const episodeId = String(episode?.id ?? "").trim();
+          if (!episodeId) return;
+          remoteOptions.push({
+            key: `remote:episode:${episodeId}`,
+            kind: "episode",
+            label: `Episode ${episodeId}`,
+            subtitle: String(episode?.subtitle ?? "").trim() || String(episode?.preview ?? "").trim() || "episode",
+            anchorNodeIds: Array.isArray(episode?.anchor_node_ids)
+              ? episode.anchor_node_ids.map((id) => String(id ?? "").trim()).filter(Boolean)
+              : [],
+          });
+        });
+        setBackendGraphSearchOptions(remoteOptions.slice(0, GRAPH_SEARCH_RESULT_LIMIT));
+      } catch (error) {
+        if (controller.signal.aborted || requestSerial !== backendSearchRequestSerialRef.current) {
+          return;
+        }
+        setBackendGraphSearchOptions([]);
+      } finally {
+        if (requestSerial === backendSearchRequestSerialRef.current) {
+          setIsBackendGraphSearchLoading(false);
+        }
+      }
+    };
+
+    run();
+    return () => {
+      try {
+        controller.abort();
+      } catch {
+        // Ignore abort cleanup failures.
+      }
+    };
+  }, [
+    graphData?.nodes,
+    graphId,
+    graphLabelInput,
+    graphSearchOpen,
+    graphSearchScope,
+    graphSearchText,
+    isProjectHydratedForSelection,
+    projectGraphBackend,
+    selectedProjectId,
+    trackedFetch,
+  ]);
 
   useEffect(() => {
     multiEdgeSelectionRef.current = multiEdgeSelection;
@@ -3043,9 +3220,9 @@ export default function GraphEmbedPanel() {
                         setGraphSearchOpen(false);
                         return;
                       }
-                      if (event.key === "Enter" && graphSearchOptions.length > 0) {
+                      if (event.key === "Enter" && mergedGraphSearchOptions.length > 0) {
                         event.preventDefault();
-                        applyGraphSearchResult(graphSearchOptions[0]);
+                        applyGraphSearchResult(mergedGraphSearchOptions[0]);
                       }
                     }}
                     placeholder="Search graph"
@@ -3082,8 +3259,14 @@ export default function GraphEmbedPanel() {
                     ))}
                   </select>
                 </div>
-                {graphSearchOpen && graphSearchOptions.length > 0 ? (
+                {graphSearchOpen &&
+                (graphSearchOptions.length > 0 ||
+                  backendGraphSearchOptions.length > 0 ||
+                  isBackendGraphSearchLoading) ? (
                   <div className="graph-quick-search-results">
+                    {graphSearchOptions.length > 0 ? (
+                      <div className="graph-quick-search-section-title">Keyword filter</div>
+                    ) : null}
                     {graphSearchOptions.map((option) => (
                       <button
                         key={option.key}
@@ -3099,6 +3282,27 @@ export default function GraphEmbedPanel() {
                         </span>
                       </button>
                     ))}
+                    {backendGraphSearchOptions.length > 0 ? (
+                      <div className="graph-quick-search-section-title">Backend hybrid search</div>
+                    ) : null}
+                    {backendGraphSearchOptions.map((option) => (
+                      <button
+                        key={option.key}
+                        className={`graph-quick-search-option graph-quick-search-option-remote ${
+                          graphSearchResult?.key === option.key ? "active" : ""
+                        }`}
+                        type="button"
+                        onClick={() => applyGraphSearchResult(option)}
+                      >
+                        <span className="graph-quick-search-option-label">{option.label}</span>
+                        <span className="graph-quick-search-option-subtitle">
+                          {option.kind} - {option.subtitle}
+                        </span>
+                      </button>
+                    ))}
+                    {isBackendGraphSearchLoading ? (
+                      <div className="graph-quick-search-loading-row">Loading backend results...</div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
