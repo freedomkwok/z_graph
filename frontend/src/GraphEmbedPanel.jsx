@@ -655,6 +655,7 @@ export default function GraphEmbedPanel() {
   const [entityTypeSearchText, setEntityTypeSearchText] = useState("");
   const [edgeTypeSearchText, setEdgeTypeSearchText] = useState("");
   const [graphSearchText, setGraphSearchText] = useState("");
+  const [debouncedGraphSearchText, setDebouncedGraphSearchText] = useState("");
   const [graphSearchScope, setGraphSearchScope] = useState("all");
   const [graphSearchResult, setGraphSearchResult] = useState(null);
   const [graphSearchOpen, setGraphSearchOpen] = useState(false);
@@ -959,6 +960,18 @@ export default function GraphEmbedPanel() {
 
   useEffect(() => {
     const normalizedQuery = String(graphSearchText ?? "").trim();
+    if (!normalizedQuery) {
+      setDebouncedGraphSearchText("");
+      return undefined;
+    }
+    const debounceTimer = window.setTimeout(() => {
+      setDebouncedGraphSearchText(graphSearchText);
+    }, 1000);
+    return () => window.clearTimeout(debounceTimer);
+  }, [graphSearchText]);
+
+  useEffect(() => {
+    const normalizedQuery = String(debouncedGraphSearchText ?? "").trim();
     if (!graphSearchOpen || !normalizedQuery || !graphId || !isProjectHydratedForSelection) {
       try {
         backendSearchAbortControllerRef.current?.abort();
@@ -1088,7 +1101,7 @@ export default function GraphEmbedPanel() {
     graphLabelInput,
     graphSearchOpen,
     graphSearchScope,
-    graphSearchText,
+    debouncedGraphSearchText,
     isProjectHydratedForSelection,
     projectGraphBackend,
     selectedProjectId,
