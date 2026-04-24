@@ -95,6 +95,11 @@ export default function TypeTagEditor({
               Merge
             </button>
           )}
+          {showCount && (!readOnly && typeof onToggleRemoveMode === "function" ? (
+            <span className="ontology-type-section-total">
+              Total: {totalCount} item{totalCount === 1 ? "" : "s"}
+            </span>
+          ) : null)}
           {!readOnly && typeof onToggleRemoveMode === "function" && (
             <button
               type="button"
@@ -105,13 +110,13 @@ export default function TypeTagEditor({
               {removeMode ? "Done" : "Edit"}
             </button>
           )}
+          {showCount && (readOnly || typeof onToggleRemoveMode !== "function") ? (
+            <span className="ontology-type-section-total">
+              Total: {totalCount} item{totalCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
         </div>
       </div>
-      {showCount && (
-        <div className="ontology-type-section-count-row">
-          Total: {totalCount} item{totalCount === 1 ? "" : "s"}
-        </div>
-      )}
       <div className="ontology-tag-editor-box" onClick={() => addInputRef.current?.focus()}>
         {visibleTags.map(({ tag, index }) => (
           <TagChip

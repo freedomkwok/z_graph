@@ -2771,17 +2771,17 @@ textarea {
   font-size: 13px;
 }
 
-.ontology-type-section-count-row {
-  margin: -2px 0 8px;
-  text-align: right;
-  font-size: 12px;
-  color: #777;
-}
-
 .ontology-type-section-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.ontology-type-section-total {
+  font-size: 12px;
+  color: #777;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ontology-type-section-search-input {
@@ -3028,9 +3028,23 @@ textarea {
 
 .ontology-string-list-toolbar {
   display: flex;
-  justify-content: flex-end;
   align-items: center;
   gap: 8px;
+}
+
+.ontology-string-list-toolbar-total {
+  font-size: 12px;
+  color: #777;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ontology-string-list-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .ontology-string-edit-mode-btn {

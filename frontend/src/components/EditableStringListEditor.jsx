@@ -115,42 +115,49 @@ export default function EditableStringListEditor({
             event.stopPropagation();
           }}
         >
-          <button
-            className="ontology-string-edit-mode-btn"
-            type="button"
-            onMouseDown={(event) => {
-              event.preventDefault();
-            }}
-            onClick={(event) => {
-              event.stopPropagation();
-              if (disabled) return;
-              setShowDeleteControls((current) => !current);
-            }}
-            disabled={disabled || normalizedValues.length === 0 || editingIndex >= 0}
-            title={showDeleteControls ? "Hide delete actions" : "Show delete actions"}
-          >
-            {showDeleteControls ? "Done" : "Edit"}
-          </button>
-          {showDeleteControls && (
+          {showCount ? (
+            <span className="ontology-string-list-toolbar-total">
+              {countLabel}: {totalCount} item{totalCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
+          <div className="ontology-string-list-toolbar-actions">
             <button
-              className="ontology-string-delete-all-btn"
+              className="ontology-string-edit-mode-btn"
               type="button"
               onMouseDown={(event) => {
                 event.preventDefault();
               }}
               onClick={(event) => {
                 event.stopPropagation();
-                clearAllValues();
+                if (disabled) return;
+                setShowDeleteControls((current) => !current);
               }}
               disabled={disabled || normalizedValues.length === 0 || editingIndex >= 0}
-              title="Delete all items"
+              title={showDeleteControls ? "Hide delete actions" : "Show delete actions"}
             >
-              Delete All
+              {showDeleteControls ? "Done" : "Edit"}
             </button>
-          )}
+            {showDeleteControls && (
+              <button
+                className="ontology-string-delete-all-btn"
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  clearAllValues();
+                }}
+                disabled={disabled || normalizedValues.length === 0 || editingIndex >= 0}
+                title="Delete all items"
+              >
+                Delete All
+              </button>
+            )}
+          </div>
         </div>
       )}
-      {showCount && (
+      {showCount && !showEditTools && (
         <div className="ontology-string-list-count-row">
           {countLabel}: {totalCount} item{totalCount === 1 ? "" : "s"}
         </div>
