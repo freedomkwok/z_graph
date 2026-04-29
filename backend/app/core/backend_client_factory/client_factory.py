@@ -25,10 +25,13 @@ import threading
 import time
 from typing import Optional
 
-from app.core.config import Config
+from graphiti_client import GraphitiOraclePGConnection  # pyright: ignore[reportMissingImports]
+
+from app.core.backend_client_factory.graphiti.graphiti_client import GraphitiClient
 from app.core.backend_client_factory.schema import ZepClientAdapter
 from app.core.backend_client_factory.zep.zep_client import ZepCloudClient
-from app.core.backend_client_factory.graphiti.graphiti_client import GraphitiClient
+from app.core.config import Config
+
 logger = logging.getLogger('z_graph.zep_factory')
 
 CLIENT_PROFILE_BUILD_GRAPH = "build_graph"
@@ -339,7 +342,6 @@ def _create_graphiti_client(
                 "Oracle Graphiti mode requires project_id. "
                 "Pass project_id to create_zep_client(...) for project-scoped operations."
             )
-        from graphiti_core.driver.oracle_pg_driver import OraclePGDriver
         pool_min = oracle_pool_min if oracle_pool_min is not None else Config.ORACLE_POOL_MIN
         pool_max = oracle_pool_max if oracle_pool_max is not None else Config.ORACLE_POOL_MAX
         pool_increment = (
@@ -360,27 +362,29 @@ def _create_graphiti_client(
         if isinstance(pool_increment, int) and pool_increment > 0:
             connect_kwargs["increment"] = pool_increment
 
-        oracle_driver_kwargs: dict[str, object] = {
-            "dsn": dsn,
-            "user": user,
-            "password": password,
-            "graph_id": normalized_project_id,
-            "log_queries": Config.ORACLE_LOG_QUERIES,
-        }
-        if isinstance(max_coroutines, int) and max_coroutines > 0:
-            oracle_driver_kwargs["max_coroutines"] = max_coroutines
-        if connect_kwargs:
-            oracle_driver_kwargs["connect_kwargs"] = connect_kwargs
         logger.info(
             "Create Graphiti Oracle Client for project_id=%s (pool_min=%s pool_max=%s pool_increment=%s max_coroutines=%s)",
             normalized_project_id,
             connect_kwargs.get("min"),
             connect_kwargs.get("max"),
             connect_kwargs.get("increment"),
-            oracle_driver_kwargs.get("max_coroutines"),
+            max_coroutines,
         )
         return GraphitiClient(
-            graph_driver=OraclePGDriver(**oracle_driver_kwargs),
+            graphiti_db="oracle",
+            oracle_connection=GraphitiOraclePGConnection(
+                dsn=dsn,
+                user=user,
+                password=password,
+                graph_id=normalized_project_id,
+                connect_kwargs=connect_kwargs or None,
+                max_coroutines=(
+                    max_coroutines
+                    if isinstance(max_coroutines, int) and max_coroutines > 0
+                    else None
+                ),
+                log_queries=Config.ORACLE_LOG_QUERIES,
+            ),
             embedding_model=embedding_model,
             enable_otel_tracing=enable_otel_tracing,
         )
