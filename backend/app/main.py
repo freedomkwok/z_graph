@@ -24,7 +24,7 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -37,6 +37,7 @@ from app.core.managers.project_manager import ProjectManager
 app = FastAPI(title=settings.app_name)
 app.include_router(api_router, prefix=settings.api_prefix)
 app.include_router(application_router, prefix=settings.api_prefix)
+request_logger = logging.getLogger("z_graph.request")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 ASSETS_DIR = STATIC_DIR / "assets"
@@ -52,6 +53,20 @@ else:
     @app.get("/")
     def root() -> dict[str, str]:
         return {"message": f"{settings.app_name} is running"}
+
+
+@app.middleware("http")
+async def log_request_started(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith(f"{settings.api_prefix}/health"):
+        client_host = request.client.host if request.client else "-"
+        request_logger.info(
+            "Request started: %s %s client=%s",
+            request.method,
+            path,
+            client_host,
+        )
+    return await call_next(request)
 
 
 def _configure_graphiti_core_logging() -> None:

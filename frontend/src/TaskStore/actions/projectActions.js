@@ -17,7 +17,7 @@ const projectDetailInFlight = new Map();
 /** After a fast response, React 18 Strict Mode may run the startup effect again; reuse briefly. */
 const projectDetailLastOk = new Map();
 const PROJECT_DETAIL_DEDUP_MS = 750;
-const PROJECT_DETAIL_REQUEST_TIMEOUT_MS = 12000;
+const PROJECT_DETAIL_REQUEST_TIMEOUT_MS = 30000;
 
 const toOptionalPositiveIntegerString = (value) => {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);

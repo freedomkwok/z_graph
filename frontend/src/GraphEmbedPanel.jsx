@@ -604,6 +604,13 @@ export default function GraphEmbedPanel() {
   const graphCacheKey = buildGraphCacheKey(graphId, projectWorkspaceId, projectGraphBackend);
   const graphDataPollIntervalMs = Math.max(1000, refreshDataPollSeconds * 1000);
   const graphLabelInput = String(state.form?.graphLabel ?? "").trim();
+  const hasHydratedSelectedProject =
+    Boolean(selectedProjectId) &&
+    isProjectHydratedForSelection &&
+    Boolean(String(projectForGraph?.project_id ?? "").trim());
+  const missingGraphMessage = hasHydratedSelectedProject
+    ? "No Graph Build found for this project."
+    : "Select a project and run graph build.";
 
   const containerRef = useRef(null);
   const svgRef = useRef(null);
@@ -1204,7 +1211,7 @@ export default function GraphEmbedPanel() {
       }
       if (!graphId) {
         setGraphData(null);
-        const message = "No graph data yet. Run Step B (Build Graph) for the selected project first.";
+        const message = missingGraphMessage;
         setError(silent ? "" : message);
         setLoading(false);
         if (!silent) {
@@ -1300,6 +1307,7 @@ export default function GraphEmbedPanel() {
       graphId,
       isLiveBuildDataRefreshEnabled,
       isProjectHydratedForSelection,
+      missingGraphMessage,
       projectGraphBackend,
       projectWorkspaceId,
       selectedProjectId,
@@ -3096,7 +3104,7 @@ export default function GraphEmbedPanel() {
       return (
         <div className="graph-state">
           <div className="graph-state-icon">◆</div>
-          <p>Select a project and run graph build.</p>
+          <p>{missingGraphMessage}</p>
         </div>
       );
     }
