@@ -17,7 +17,8 @@ const projectDetailInFlight = new Map();
 /** After a fast response, React 18 Strict Mode may run the startup effect again; reuse briefly. */
 const projectDetailLastOk = new Map();
 const PROJECT_DETAIL_DEDUP_MS = 750;
-const PROJECT_DETAIL_REQUEST_TIMEOUT_MS = 30000;
+/** Injected at build/dev time from `PROJECT_DETAIL_REQUEST_TIMEOUT_MS` (see `frontend/vite.config.js`). */
+const PROJECT_DETAIL_REQUEST_TIMEOUT_MS = __PROJECT_DETAIL_REQUEST_TIMEOUT_MS__;
 
 const toOptionalPositiveIntegerString = (value) => {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);

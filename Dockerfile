@@ -4,6 +4,8 @@ WORKDIR /frontend
 COPY frontend/package.json ./
 RUN npm install
 COPY frontend/ ./
+ARG PROJECT_DETAIL_REQUEST_TIMEOUT_MS=120000
+ENV PROJECT_DETAIL_REQUEST_TIMEOUT_MS=${PROJECT_DETAIL_REQUEST_TIMEOUT_MS}
 RUN npm run build
 
 FROM python:3.11-slim
