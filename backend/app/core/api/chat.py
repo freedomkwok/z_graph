@@ -20,17 +20,37 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from fastapi import APIRouter
+from uuid import uuid4
 
-from app.core.api.chat import router as chat_router
-from app.core.api.health import router as health_router
-from app.core.api.ontology import router as ontology_router
-from app.core.api.project import router as project_router
-from app.core.api.prompt_labels import router as prompt_label_router
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
-api_router = APIRouter()
-api_router.include_router(chat_router, prefix="/chat", tags=["chat"])
-api_router.include_router(health_router, prefix="/health", tags=["health"])
-api_router.include_router(ontology_router, tags=["ontology"])
-api_router.include_router(prompt_label_router, tags=["prompt-label"])
-api_router.include_router(project_router, tags=["graph"])
+router = APIRouter()
+_chat_sessions: set[str] = set()
+
+
+class ChatMessageRequest(BaseModel):
+    session_id: str = Field(min_length=1)
+    query: str = Field(min_length=1)
+
+
+@router.post("/session")
+def create_chat_session() -> dict[str, object]:
+    session_id = str(uuid4())
+    _chat_sessions.add(session_id)
+    return {"success": True, "session_id": session_id}
+
+
+@router.post("/message")
+def send_chat_message(request: ChatMessageRequest) -> dict[str, object]:
+    session_id = request.session_id.strip()
+    query = request.query.strip()
+    if not session_id or session_id not in _chat_sessions:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    if not query:
+        raise HTTPException(status_code=400, detail="Query is required")
+    return {
+        "success": True,
+        "session_id": session_id,
+        "reply": f"Chat backend received: {query}",
+    }

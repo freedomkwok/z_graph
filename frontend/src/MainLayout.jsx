@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import ChatWindow from "./components/ChatWindow";
 import GraphEmbedPanel from "./GraphEmbedPanel";
 import TaskPanel from "./TaskPanel";
 import TopBar from "./TopBar";
@@ -103,6 +104,7 @@ export default function MainLayout({ currentPage = "workspace", onNavigate }) {
         )}
         <GraphEmbedPanel key="graph-panel" />
       </main>
+      <ChatWindow />
     </div>
   );
 }
