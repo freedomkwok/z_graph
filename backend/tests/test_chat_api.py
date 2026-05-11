@@ -103,3 +103,56 @@ def test_chat_message_requires_graph_id() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_chat_message_accepts_restored_browser_session() -> None:
+    agent_calls: list[dict[str, object]] = []
+
+    class FakeAgentResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {
+                "task_id": "task-2",
+                "task_status": "completed",
+                "final_text": "Restored session answer",
+            }
+
+    class FakeAgentClient:
+        def __init__(self, timeout: float) -> None:
+            self.timeout = timeout
+
+        def __enter__(self) -> "FakeAgentClient":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def post(self, url: str, json: dict[str, object]) -> FakeAgentResponse:
+            agent_calls.append({"url": url, "json": json, "timeout": self.timeout})
+            return FakeAgentResponse()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/chat")
+    client = TestClient(app)
+    previous_base_url = chat.settings.agent_api_base_url
+    chat.settings.agent_api_base_url = "http://agent-api.test"
+
+    try:
+        original_client = chat.httpx.Client
+        chat.httpx.Client = FakeAgentClient
+        response = client.post(
+            "/api/chat/message",
+            json={
+                "session_id": "restored-browser-session",
+                "query": "What is in this graph?",
+                "graph_id": "graph-1",
+            },
+        )
+    finally:
+        chat.httpx.Client = original_client
+        chat.settings.agent_api_base_url = previous_base_url
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == "Restored session answer"
+    assert agent_calls[0]["url"] == "http://agent-api.test/chat"

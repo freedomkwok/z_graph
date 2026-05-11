@@ -7,12 +7,7 @@ const CHAT_SESSION_STORAGE_PREFIX = "z_graph.chat_session";
 const DEFAULT_CHAT_SIZE = { width: 360, height: 480 };
 const MIN_CHAT_WIDTH = 280;
 const MIN_CHAT_HEIGHT = 320;
-const DEFAULT_MESSAGES = [
-  {
-    role: "bot",
-    text: "Select a project to chat with its graph.",
-  },
-];
+const DEFAULT_MESSAGES = [];
 
 function extractGraphIdFromAddress(address) {
   const raw = String(address ?? "").trim();
@@ -45,7 +40,7 @@ function getProjectScopedMessages(graphId) {
   return [
     {
       role: "bot",
-      text: graphId ? "Ask a question about this project's graph." : "Select a project to chat with its graph.",
+      text: graphId ? "Ask a question about this project's graph." : "This project does not have a graph yet.",
     },
   ];
 }
@@ -70,6 +65,7 @@ export default function ChatWindow() {
   const [sessionError, setSessionError] = useState("");
   const messagesRef = useRef(null);
   const resizeRef = useRef(null);
+  const hasSelectedProject = Boolean(selectedProjectId);
 
   useEffect(() => {
     setQuery("");
@@ -167,10 +163,15 @@ export default function ChatWindow() {
     event.preventDefault();
     const nextQuery = query.trim();
     if (!nextQuery || isSending) return;
+    const loadingMessageId = `loading-${Date.now()}`;
 
     setQuery("");
     setIsSending(true);
-    setMessages((current) => [...current, { role: "user", text: nextQuery }]);
+    setMessages((current) => [
+      ...current,
+      { role: "user", text: nextQuery },
+      { id: loadingMessageId, role: "bot", text: "Loading..." },
+    ]);
 
     try {
       if (!sessionId) {
@@ -193,22 +194,27 @@ export default function ChatWindow() {
       if (!response.ok) {
         throw new Error(payload?.detail || payload?.error || "Chat request failed");
       }
-      setMessages((current) => [
-        ...current,
-        { role: "bot", text: payload?.reply || "I received your message." },
-      ]);
+      const reply = payload?.reply || "I received your message.";
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === loadingMessageId ? { ...message, text: reply } : message,
+        ),
+      );
     } catch (error) {
-      setMessages((current) => [
-        ...current,
-        {
-          role: "bot",
-          text: error instanceof Error ? error.message : "Chat request failed",
-        },
-      ]);
+      const errorText = error instanceof Error ? error.message : "Chat request failed";
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === loadingMessageId ? { ...message, text: errorText } : message,
+        ),
+      );
     } finally {
       setIsSending(false);
     }
   };
+
+  if (!hasSelectedProject) {
+    return null;
+  }
 
   if (!isVisible) {
     return (

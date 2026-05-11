@@ -20,6 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -30,6 +31,7 @@ from pydantic import BaseModel, Field
 from app.core.config import settings
 
 router = APIRouter()
+logger = logging.getLogger("z_graph.api")
 _chat_sessions: set[str] = set()
 
 
@@ -68,8 +70,10 @@ def send_chat_message(request: ChatMessageRequest) -> dict[str, object]:
     session_id = request.session_id.strip()
     query = str(request.query or request.message or "").strip()
     graph_id = request.graph_id.strip()
-    if not session_id or session_id not in _chat_sessions:
-        raise HTTPException(status_code=404, detail="Chat session not found")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Chat session is required")
+    if session_id not in _chat_sessions:
+        _chat_sessions.add(session_id)
     if not query:
         raise HTTPException(status_code=400, detail="Query is required")
     if not graph_id:
@@ -87,8 +91,15 @@ def send_chat_message(request: ChatMessageRequest) -> dict[str, object]:
     }
 
     try:
+        agent_chat_url = _agent_chat_url()
+        logger.info(
+            "Proxying chat message to agent_api url=%s graph_id=%s project_id=%s",
+            agent_chat_url,
+            graph_id,
+            project_id or "-",
+        )
         with httpx.Client(timeout=settings.agent_api_timeout_seconds) as client:
-            response = client.post(_agent_chat_url(), json=agent_request)
+            response = client.post(agent_chat_url, json=agent_request)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Agent chat request failed: {exc}") from exc
 
