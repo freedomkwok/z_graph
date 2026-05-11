@@ -194,7 +194,7 @@ export default function ChatWindow() {
       if (!response.ok) {
         throw new Error(payload?.detail || payload?.error || "Chat request failed");
       }
-      const reply = payload?.reply || "I received your message.";
+      const reply = payload?.reply || "Agent returned no response.";
       setMessages((current) =>
         current.map((message) =>
           message.id === loadingMessageId ? { ...message, text: reply } : message,
