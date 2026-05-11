@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     project_get_warmup_timeout_seconds: float = 3.0
     # Skip repeated GET warm-up for same project/ontology/graph key within this window.
     project_get_warmup_dedupe_ttl_seconds: int = 30
+    agent_api_base_url: str = "http://localhost:8080"
+    agent_api_timeout_seconds: float = 650.0
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
@@ -164,6 +166,8 @@ class Config:
     GRAPH_BUILD_BATCH_SIZE = settings.graph_build_batch_size
     PROJECT_GET_WARMUP_TIMEOUT_SECONDS = settings.project_get_warmup_timeout_seconds
     PROJECT_GET_WARMUP_DEDUPE_TTL_SECONDS = settings.project_get_warmup_dedupe_ttl_seconds
+    AGENT_API_BASE_URL = settings.agent_api_base_url
+    AGENT_API_TIMEOUT_SECONDS = settings.agent_api_timeout_seconds
 
     LANGFUSE_PUBLIC_KEY = settings.langfuse_public_key
     LANGFUSE_SECRET_KEY = settings.langfuse_secret_key

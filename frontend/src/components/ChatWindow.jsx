@@ -1,25 +1,70 @@
 import { useEffect, useRef, useState } from "react";
 
 import { withApiBase } from "../TaskStore/constants";
+import { useTaskStore } from "../TaskStore/index";
 
-const CHAT_SESSION_STORAGE_KEY = "z_graph.chat_session_id";
+const CHAT_SESSION_STORAGE_PREFIX = "z_graph.chat_session";
 const DEFAULT_CHAT_SIZE = { width: 360, height: 480 };
 const MIN_CHAT_WIDTH = 280;
 const MIN_CHAT_HEIGHT = 320;
+const DEFAULT_MESSAGES = [
+  {
+    role: "bot",
+    text: "Select a project to chat with its graph.",
+  },
+];
+
+function extractGraphIdFromAddress(address) {
+  const raw = String(address ?? "").trim();
+  if (!raw) return "";
+
+  try {
+    const parsed = new URL(raw);
+    const queryGraphId = parsed.searchParams.get("graph_id") || parsed.searchParams.get("graphId");
+    if (queryGraphId) return queryGraphId.trim();
+
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const graphIndex = segments.indexOf("graphs");
+    if (graphIndex >= 0 && graphIndex + 1 < segments.length) {
+      return decodeURIComponent(String(segments[graphIndex + 1] ?? "").trim());
+    }
+  } catch {
+    return "";
+  }
+
+  return "";
+}
+
+function getProjectGraphId(project) {
+  const directGraphId = String(project?.zep_graph_id ?? project?.graph_id ?? "").trim();
+  if (directGraphId) return directGraphId;
+  return extractGraphIdFromAddress(project?.zep_graph_address);
+}
+
+function getProjectScopedMessages(graphId) {
+  return [
+    {
+      role: "bot",
+      text: graphId ? "Ask a question about this project's graph." : "Select a project to chat with its graph.",
+    },
+  ];
+}
 
 export default function ChatWindow() {
+  const { state } = useTaskStore();
+  const selectedProjectId = String(state.form?.projectId ?? "").trim();
+  const currentProjectId = String(state.currentProject?.project_id ?? "").trim();
+  const currentProject = selectedProjectId && selectedProjectId === currentProjectId ? state.currentProject : null;
+  const graphId = getProjectGraphId(currentProject);
+  const sessionStorageKey =
+    selectedProjectId && graphId
+      ? `${CHAT_SESSION_STORAGE_PREFIX}.${selectedProjectId}.${graphId}`
+      : "";
   const [isVisible, setIsVisible] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [chatSize, setChatSize] = useState(DEFAULT_CHAT_SIZE);
-  const [sessionId, setSessionId] = useState(() => {
-    return window.sessionStorage.getItem(CHAT_SESSION_STORAGE_KEY) || "";
-  });
-  const [messages, setMessages] = useState([
-    {
-      role: "bot",
-      text: "Ask a question about your graph.",
-    },
-  ]);
+  const [sessionId, setSessionId] = useState("");
+  const [messages, setMessages] = useState(DEFAULT_MESSAGES);
   const [query, setQuery] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [sessionError, setSessionError] = useState("");
@@ -27,7 +72,15 @@ export default function ChatWindow() {
   const resizeRef = useRef(null);
 
   useEffect(() => {
-    if (sessionId) return;
+    setQuery("");
+    setIsSending(false);
+    setSessionError("");
+    setMessages(getProjectScopedMessages(graphId));
+    setSessionId(sessionStorageKey ? window.sessionStorage.getItem(sessionStorageKey) || "" : "");
+  }, [graphId, sessionStorageKey]);
+
+  useEffect(() => {
+    if (!sessionStorageKey || sessionId) return;
     let ignore = false;
 
     const createSession = async () => {
@@ -38,7 +91,7 @@ export default function ChatWindow() {
           throw new Error(payload?.detail || payload?.error || "Unable to create chat session");
         }
         if (ignore) return;
-        window.sessionStorage.setItem(CHAT_SESSION_STORAGE_KEY, payload.session_id);
+        window.sessionStorage.setItem(sessionStorageKey, payload.session_id);
         setSessionId(payload.session_id);
         setSessionError("");
       } catch (error) {
@@ -51,7 +104,7 @@ export default function ChatWindow() {
     return () => {
       ignore = true;
     };
-  }, [sessionId]);
+  }, [sessionId, sessionStorageKey]);
 
   useEffect(() => {
     if (!messagesRef.current) return;
@@ -123,10 +176,18 @@ export default function ChatWindow() {
       if (!sessionId) {
         throw new Error("Chat session is not ready yet");
       }
+      if (!graphId) {
+        throw new Error("Select a project with a graph before chatting");
+      }
       const response = await fetch(withApiBase("/api/chat/message"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, query: nextQuery }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          query: nextQuery,
+          graph_id: graphId,
+          project_id: selectedProjectId,
+        }),
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -225,13 +286,14 @@ export default function ChatWindow() {
               type="text"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Type your query..."
+              placeholder={graphId ? "Type your query..." : "Select a project with a graph first"}
               aria-label="Chat query"
+              disabled={!graphId}
             />
             <button
               className="chat-send-btn"
               type="submit"
-              disabled={!query.trim() || isSending || !sessionId}
+              disabled={!query.trim() || isSending || !sessionId || !graphId}
             >
               {isSending ? "Sending" : "Send"}
             </button>
