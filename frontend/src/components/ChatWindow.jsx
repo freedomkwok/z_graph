@@ -36,6 +36,10 @@ function getProjectGraphId(project) {
   return extractGraphIdFromAddress(project?.zep_graph_address);
 }
 
+function getProjectGraphBackend(project) {
+  return String(project?.graph_backend ?? "").trim().toLowerCase();
+}
+
 function getProjectScopedMessages(graphId) {
   return [
     {
@@ -51,6 +55,7 @@ export default function ChatWindow() {
   const currentProjectId = String(state.currentProject?.project_id ?? "").trim();
   const currentProject = selectedProjectId && selectedProjectId === currentProjectId ? state.currentProject : null;
   const graphId = getProjectGraphId(currentProject);
+  const graphBackend = getProjectGraphBackend(currentProject);
   const sessionStorageKey =
     selectedProjectId && graphId
       ? `${CHAT_SESSION_STORAGE_PREFIX}.${selectedProjectId}.${graphId}`
@@ -187,6 +192,7 @@ export default function ChatWindow() {
           session_id: sessionId,
           query: nextQuery,
           graph_id: graphId,
+          graph_backend: graphBackend || undefined,
           project_id: selectedProjectId,
         }),
       });

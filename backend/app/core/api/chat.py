@@ -38,6 +38,7 @@ _chat_sessions: set[str] = set()
 class ChatMessageRequest(BaseModel):
     session_id: str = Field(min_length=1)
     graph_id: str = Field(min_length=1)
+    graph_backend: str | None = None
     query: str | None = None
     message: str | None = None
     project_id: str | None = None
@@ -83,6 +84,9 @@ def send_chat_message(request: ChatMessageRequest) -> dict[str, object]:
     project_id = str(request.project_id or "").strip()
     if project_id:
         metadata["project_id"] = project_id
+    graph_backend = str(request.graph_backend or metadata.get("graph_backend") or "").strip()
+    if graph_backend:
+        metadata["graph_backend"] = graph_backend
 
     agent_request = {
         "message": query,

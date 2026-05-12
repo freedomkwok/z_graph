@@ -62,6 +62,7 @@ def test_chat_message_returns_reply_for_session() -> None:
                 "session_id": session_id,
                 "query": "What is in this graph?",
                 "graph_id": "graph-1",
+                "graph_backend": "oracle",
                 "project_id": "project-1",
             },
         )
@@ -84,7 +85,10 @@ def test_chat_message_returns_reply_for_session() -> None:
             "json": {
                 "message": "What is in this graph?",
                 "graph_id": "graph-1",
-                "metadata": {"project_id": "project-1"},
+                "metadata": {
+                    "project_id": "project-1",
+                    "graph_backend": "oracle",
+                },
             },
             "timeout": chat.settings.agent_api_timeout_seconds,
         }
